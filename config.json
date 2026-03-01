@@ -1,0 +1,20 @@
+{
+  "port": "/dev/ttyUSB0",
+  "baud": 115200,
+  "databits": 8,
+  "parity": "None",
+  "stopbits": "1",
+  "flowcontrol": "None",
+  "eol_tx": "LF",
+  "eol_rx": "LF",
+  "color_rx": "#086135",
+  "color_tx": "#046B8A",
+  "color_bg": "#1C1C1C",
+  "show_ascii": true,
+  "show_hex": true,
+  "show_timestamp": true,
+  "theme": "dark",
+  "cmd_history": [],
+  "auto_send_interval": 5.0,
+  "send_format": "ASCII"
+}
