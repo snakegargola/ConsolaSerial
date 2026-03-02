@@ -54,6 +54,19 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 
 ## Distribución
 
+### 📦 Descarga directa (GitHub Releases)
+
+En cada release se publican ejecutables de un solo archivo:
+
+- **Windows:** `SerialMonitor-windows.exe`
+- **Ubuntu/Linux:** `SerialMonitor-linux`
+
+Descarga desde **Releases** y ejecútalo directamente (sin instalar Python ni dependencias).
+
+Notas:
+- En Linux, dar permisos si hace falta: `chmod +x SerialMonitor-linux`
+- `config.json` es opcional; si no existe, la app usa valores por defecto
+
 ### ✅ Linux - Ejecutable Listo
 
 ```bash
