@@ -14,7 +14,26 @@
   "show_hex": true,
   "show_timestamp": true,
   "theme": "dark",
-  "cmd_history": [],
+  "cmd_history": [
+    "ls"
+  ],
   "auto_send_interval": 5.0,
-  "send_format": "ASCII"
+  "send_format": "ASCII",
+  "sequence_commands": [
+    "hola como estan",
+    "bueno dias a todos",
+    "buenas noches a todos",
+    "un palcer conocerlos",
+    "o que hermosa maravilla"
+  ],
+  "sequence_interval": 1.0,
+  "sequence_mode": "Stop",
+  "alerts": [],
+  "quick_commands": {
+    "F1": "",
+    "F2": "",
+    "F3": "",
+    "F4": "",
+    "F5": ""
+  }
 }

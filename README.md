@@ -1,133 +1,222 @@
-# Serial Monitor (PyQt6)
+# Serial Monitor (PyQt6) - v2.0
 
 Aplicación de escritorio para monitoreo y envío de datos por puerto serial, construida con **Python + PyQt6 + pyserial**.
 
-## Características
+## Versión 2.0 - Novedades
 
-- Conexión serial configurable: puerto, baud rate, data bits, parity, stop bits y flow control.
-- Recepción y envío en tiempo real.
-- Formatos de envío: `ASCII` y `HEX`.
-- Soporte de fin de línea TX/RX: `None`, `LF`, `CR`, `CR+LF`.
-- Modo auto-envío con intervalo configurable.
-- Monitor con timestamp, vista ASCII/HEX y contadores RX/TX.
-- Historial de comandos.
-- Personalización de colores (RX/TX/Fondo) y tema claro/oscuro.
-- Guardado de configuración en `config.json`.
-- Build de ejecutables para Linux y Windows con PyInstaller.
+✨ **Interfaz Mejorada:**
+- **Tooltips informativos** (🔹) en todos los parámetros de configuración
+- Explicaciones contextuales al pasar el ratón
+- Mejor claridad para usuarios nuevos
 
-## Requisitos
+📁 **Organización del Proyecto:**
+- Documentación completa en carpeta `docs/`
+- Ejecutable Linux listo en `dist/linux/`
+- Proyecto compilable para Windows en `dist/windows-build-source/`
+- Instrucciones de permisos para Linux serial
 
-- Python 3.12+
-- pip
-- Dependencias del sistema para PyQt6 (en Linux, según distro)
+## Características Principales
 
-## Instalación (desarrollo)
+### Core
+- Conexión serial configurable: puerto, baud rate, data bits, parity, stop bits y flow control
+- **Tooltips informativos** (NUEVO v2) - Aprende cada parámetro
+- Recepción y envío en tiempo real
+- Formatos de envío: `ASCII` y `HEX`
+- Soporte de fin de línea TX/RX: `None`, `LF`, `CR`, `CR+LF`
+- Monitor con timestamp, vista ASCII/HEX
+- Historial de comandos
+- Personalización de colores (RX/TX/Fondo) y tema claro/oscuro
 
-### Linux / macOS
+### Secuencias de Comandos
+- **Lista ordenada de comandos** con reordenamiento ( ↑↓ )
+- **Variables dinámicas**: `{timestamp}`, `{counter}`, `{random}`
+- **Modos de ejecución**: Stop o Restart al finalizar
+- **Resaltado visual** del comando en ejecución
+- **Exportar/Importar** secuencias en formato JSON
 
+### Monitoreo Avanzado
+- **🔍 Búsqueda en tiempo real** con navegación y resaltado
+- **📌 Filtros** (texto o regex) para ocultar mensajes no relevantes
+- **📊 Estadísticas**: velocidad (B/s), RX total, TX total
+- **🔔 Alertas** configurables por patrón (texto o regex)
+
+### Productividad
+- **⌨️ Atajos de teclado**: Ctrl+Enter (enviar), Ctrl+L (limpiar), Ctrl+K (conectar), Ctrl+F (buscar), etc.
+- **F1-F5**: Comandos rápidos configurables
+- Guardado automático de configuración en `config.json`
+
+### Build y Distribución
+- ✅ Ejecutables compilados para Linux: `dist/linux/SerialMonitor`
+- 🔧 Proyecto listo para compilar en Windows: `dist/windows-build-source/`
+- 📚 Documentación completa
+
+📖 **[Ver documentación completa de funcionalidades →](FEATURES.md)**
+
+## Distribución
+
+### ✅ Linux - Ejecutable Listo
+
+```bash
+./dist/linux/SerialMonitor
+```
+
+Ver instrucciones en: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
+
+### 🔧 Windows - Compilación 
+
+Instrucciones completas en: [`dist/windows-build-source/README_COMPILACION.md`](dist/windows-build-source/README_COMPILACION.md)
+## Instalación y Ejecución
+
+### Modo Desarrollo
+
+**Linux / macOS:**
 ```bash
 python3 -m venv GuisSerial
 source GuisSerial/bin/activate
 pip install -r requirements.txt
+./GuisSerial/bin/python main.py
 ```
 
-### Windows (PowerShell)
-
+**Windows (PowerShell):**
 ```powershell
 py -m venv GuisSerial
 .\GuisSerial\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-## Ejecución
-
-```bash
 python main.py
 ```
 
-Si usas el entorno del proyecto en Linux:
+### Modo Ejecutable
 
+**Linux:**
 ```bash
-GuisSerial/bin/python main.py
+./dist/linux/SerialMonitor
 ```
+Ver: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
 
-## Build de ejecutables
+**Windows:**
+Compilar con instrucciones en: [`dist/windows-build-source/README_COMPILACION.md`](dist/windows-build-source/README_COMPILACION.md)
 
-Consulta [BUILD.md](BUILD.md).
+## Documentación
 
-### Resumen rápido
+### Para Usuarios
+- **[`dist/linux/LEEME.md`](dist/linux/LEEME.md)** - Instrucciones Linux, permisos seriales
 
-- Linux:
-  - `chmod +x scripts/build_linux.sh`
-  - `./scripts/build_linux.sh`
-  - Salida: `dist/linux/SerialMonitor`
+### Para Desarrolladores
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** - Arquitectura y módulos
+- **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** - Guía de desarrollo
+- **[`FEATURES.md`](FEATURES.md)** - Características detalladas
+- **[`BUILD.md`](BUILD.md)** - Instrucciones de compilación
 
-- Windows (en una máquina Windows):
-  - `scripts\build_windows.bat` o `./scripts/build_windows.ps1`
-  - Salida: `dist/windows/SerialMonitor.exe`
+## Estructura del Proyecto
 
-> Nota: un `.exe` nativo de Windows debe compilarse en Windows.
-
-## Estructura del proyecto
-
-```text
+```
 Serialpython/
-├── app/
-│   ├── config_manager.py
-│   ├── log_manager.py
-│   ├── serial_monitor.py
-│   └── serial_worker.py
+├── main.py                          # Punto de entrada
+├── app/                             # Código fuente
+│   ├── serial_monitor.py            # Ventana principal (PyQt6)
+│   ├── serial_worker.py             # Worker thread serial
+│   ├── config_manager.py            # Gestión de config
+│   └── log_manager.py               # Gestión de logs
+├── dist/
+│   ├── linux/                       # ✅ Ejecutable Linux listo
+│   │   ├── SerialMonitor            # Ejecutable
+│   │   ├── LEEME.md                 # Instrucciones
+│   │   ├── config.json
+│   │   └── serial.png
+│   ├── windows/                     # 📝 Instrucciones para compilar
+│   │   └── BUILD_INSTRUCCIONES.md
+│   └── windows-build-source/        # 🔧 Proyecto para compilar en Windows
+│       ├── app/                     # Código fuente
+│       ├── main.py
+│       ├── requirements.txt
+│       └── README_COMPILACION.md
+├── docs/                            # 📚 Documentación técnica
+│   ├── ARCHITECTURE.md
+│   └── DEVELOPMENT.md
 ├── assets/
 ├── scripts/
-├── main.py
-├── config.json
-├── requirements.txt
-├── requirements-build.txt
-└── BUILD.md
+├── config.json                      # Configuración
+├── requirements.txt                 # Dependencias
+└── README.md                        # Este archivo
 ```
 
-## Configuración
+## Características v2.0
 
-La configuración de usuario se guarda en `config.json`.
+## Características v2.0
 
-- En modo desarrollo: en la raíz del proyecto.
-- En ejecutable empaquetado: junto al binario (`dist/linux` o `dist/windows`).
+✨ **Interfaz Mejorada:**
+- Tooltips informativos (🔹) en todos los parámetros
+- Explicaciones claras para usuarios nuevos
+- Mejor organización visual
+
+📚 **Documentación Completa:**
+- Documentación técnica en `docs/`
+- Instrucciones Linux en `dist/linux/LEEME.md`
+- Guía Windows en `dist/windows-build-source/`
+
+⚙️ **Build Listo:**
+- Ejecutable Linux funcional en `dist/linux/`
+- Proyecto Windows listo para compilar
 
 ## Troubleshooting
 
-- **No aparecen puertos seriales**
-  - Verifica permisos del sistema (Linux: grupo `dialout` o equivalente).
-  - Revisa cable/driver del adaptador USB-Serial.
+### Linux - Permisos de Puerto Serial
 
-- **Error al iniciar GUI en Linux**
-  - Instala librerías faltantes de Qt/X11 según tu distro.
+```bash
+# Agregar usuario a grupo dialout
+sudo usermod -a -G dialout $USER
+newgrp dialout
+```
 
-- **Build Windows desde Linux no genera `.exe` válido**
-  - Compila Windows directamente en Windows con los scripts del proyecto.
+Ver instrucciones completas: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
 
-## Roadmap sugerido
+### No aparecen puertos seriales
 
-- Exportar/importar perfiles de configuración.
-- Vista de tramas por protocolo.
-- Pruebas automatizadas para lógica serial y configuración.
+- Verificar permisos (Linux)
+- Revisar cable/driver USB-Serial
+- Comprobar en gestor de dispositivos
+
+### Error al iniciar
+
+- Verificar que Python 3.12+ esté instalado
+- Reinstalar dependencias: `pip install -r requirements.txt --upgrade`
+
+## Próximos Pasos
+
+1. ✅ Compilación y ejecución funcional
+2. ✅ Documentación completa
+3. ✅ Interfaz mejorada con tooltips
+4. 📊 Estadísticas y monitoreo avanzado
+5. 🧪 Suite de pruebas automatizadas
 
 ## Contribuciones
 
-1. Crea una rama (`feature/mi-cambio`).
-2. Realiza cambios pequeños y claros.
-3. Abre un Pull Request con descripción y pasos de prueba.
+1. Crea rama feature: `git checkout -b feature/mejora`
+2. Haz cambios claros y prueba
+3. Commit descriptivo: `git commit -m "feat: descripción"`
+4. Push y Pull Request
 
-## Publicación en GitHub
+## Roadmap
 
-Checklist recomendado:
+- [ ] Exportar/importar perfiles de configuración
+- [ ] Protocolo Modbus
+- [ ] Interfaz web de monitoreo
+- [ ] Aplicación móvil
 
-- [ ] Revisar y actualizar este `README.md`.
-- [x] Agregar archivo `LICENSE` (MIT).
-- [ ] Confirmar que `.gitignore` excluye binarios/venv.
-- [ ] Crear primer release con artefactos (`dist/linux` y `dist/windows`).
+## Publicación
 
-Guía paso a paso: `PUBLISH.md`
+Checklist para release:
+
+- [x] README.md actualizado
+- [x] Documentación técnica
+- [x] Ejecutable Linux funcional
+- [x] Proyecto Windows compilable
+- [x] Instrucciones de instalación
+- [ ] Release en GitHub
+- [ ] Artefactos en GitHub
+
+Guía: [`PUBLISH.md`](PUBLISH.md)
 
 ---
 
-Proyecto listo para preparar y publicar el primer release en GitHub.
+**Serial Monitor v2.0** - Listo para usar y distribuir 🚀

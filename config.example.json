@@ -1,0 +1,52 @@
+{
+  "port": "",
+  "baud": 115200,
+  "databits": 8,
+  "parity": "None",
+  "stopbits": "1",
+  "flowcontrol": "None",
+  "eol_tx": "LF",
+  "eol_rx": "LF",
+  "color_rx": "#00FF7F",
+  "color_tx": "#00BFFF",
+  "color_bg": "#1C1C1C",
+  "show_ascii": true,
+  "show_hex": false,
+  "show_timestamp": true,
+  "theme": "dark",
+  "cmd_history": [],
+  "auto_send_interval": 1.0,
+  "send_format": "ASCII",
+  "sequence_commands": [
+    "RESET",
+    "SET_TIME {timestamp}",
+    "START_TEST {counter}",
+    "STATUS"
+  ],
+  "sequence_interval": 2.0,
+  "sequence_mode": "Restart",
+  "alerts": [
+    {
+      "pattern": "ERROR",
+      "regex": false,
+      "sound": false
+    },
+    {
+      "pattern": "FATAL",
+      "regex": false,
+      "sound": false
+    },
+    {
+      "pattern": "^.*CRITICAL.*$",
+      "regex": true,
+      "sound": false
+    }
+  ],
+  "quick_commands": {
+    "F1": "VERSION",
+    "F2": "RESET",
+    "F3": "STATUS",
+    "F4": "START",
+    "F5": "STOP"
+  }
+}

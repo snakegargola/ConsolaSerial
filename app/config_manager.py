@@ -21,6 +21,17 @@ DEFAULT_CONFIG = {
     "cmd_history": [],
     "auto_send_interval": 1.0,
     "send_format": "ASCII",
+    "sequence_commands": [],
+    "sequence_interval": 1.0,
+    "sequence_mode": "Stop",
+    "alerts": [],
+    "quick_commands": {
+        "F1": "",
+        "F2": "",
+        "F3": "",
+        "F4": "",
+        "F5": ""
+    }
 }
 
 if getattr(sys, "frozen", False):
