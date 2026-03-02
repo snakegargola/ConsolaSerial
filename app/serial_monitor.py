@@ -818,8 +818,10 @@ class SerialMonitorApp(QMainWindow):
 
     def _get_sequence_command_format(self, row: int) -> str:
         combo = self.seq_table.cellWidget(row, 2)
-        if combo and combo.currentText() in SEND_FMTS:
-            return combo.currentText()
+        if combo:
+            fmt = str(combo.currentText()).strip().upper()
+            if fmt == "HEX":
+                return "HEX"
         return "ASCII"
     
     def _reconnect_sequence_buttons(self):
@@ -939,7 +941,13 @@ class SerialMonitorApp(QMainWindow):
                 payload = cmd_text.encode("utf-8")
             payload += eol
         except ValueError:
-            self.statusBar().showMessage(f"Invalid command at row {index + 1}", 3000)
+            if fmt == "HEX":
+                self.statusBar().showMessage(
+                    f"Invalid HEX at row {index + 1}. Use bytes like: AA 55 0D 0A",
+                    5000,
+                )
+            else:
+                self.statusBar().showMessage(f"Invalid command at row {index + 1}", 3000)
             return
         
         if self.worker and self.worker.is_connected:
@@ -979,7 +987,12 @@ class SerialMonitorApp(QMainWindow):
                 payload = expanded.encode("utf-8")
             payload += eol
         except ValueError:
-            self.statusBar().showMessage(f"Invalid command at row {index + 1}", 3000)
+            if fmt == "HEX":
+                msg = f"El comando de la fila {index + 1} no es HEX válido. Ejemplo: AA 55 0D 0A"
+                self.statusBar().showMessage(msg, 5000)
+                QMessageBox.warning(self, "Formato HEX inválido", msg)
+            else:
+                self.statusBar().showMessage(f"Invalid command at row {index + 1}", 3000)
             return
         
         self.worker.send(payload)
