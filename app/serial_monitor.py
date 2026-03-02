@@ -104,7 +104,15 @@ class SerialMonitorApp(QMainWindow):
         
         # Create horizontal splitter for sequence panel and main content
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_sequence_panel())
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
+        splitter.setStyleSheet("QSplitter::handle { background-color: #3a3a3a; }")
+        self.main_splitter = splitter
+
+        seq_panel = self._build_sequence_panel()
+        seq_panel.setMinimumWidth(320)
+        seq_panel.setMaximumWidth(520)
+        splitter.addWidget(seq_panel)
         
         # Right side: monitor and send panel
         right_widget = QWidget()
@@ -113,11 +121,14 @@ class SerialMonitorApp(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(self._build_monitor(), stretch=1)
         right_layout.addWidget(self._build_send_panel())
+        right_widget.setMinimumWidth(420)
         
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 0)  # Sequence panel fixed width
-        splitter.setStretchFactor(1, 1)  # Monitor expands
-        splitter.setSizes([350, 800])    # Initial sizes
+        splitter.setStretchFactor(0, 0)  # Sequence panel compact
+        splitter.setStretchFactor(1, 1)  # Monitor/send expands
+        sequence_panel_width = int(self.config.get("sequence_panel_width", 360))
+        sequence_panel_width = max(320, min(520, sequence_panel_width))
+        splitter.setSizes([sequence_panel_width, 900])
         
         root.addWidget(splitter, stretch=1)
 
@@ -266,23 +277,31 @@ class SerialMonitorApp(QMainWindow):
         box = QGroupBox("Command Sequence")
         vbox = QVBoxLayout(box)
         vbox.setSpacing(4)
+        box.setMinimumWidth(320)
+        box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         
         # Command list table
         self.seq_table = QTableWidget()
-        self.seq_table.setColumnCount(5)
-        self.seq_table.setHorizontalHeaderLabels(["", "Command", "▶", "↑↓", "✕"])
-        self.seq_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.seq_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.seq_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.seq_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.seq_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.seq_table.setColumnCount(6)
+        self.seq_table.setHorizontalHeaderLabels(["", "Command", "Fmt", "▶", "↑↓", "✕"])
+        header = self.seq_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        header.setMinimumSectionSize(28)
         self.seq_table.setColumnWidth(0, 30)
-        self.seq_table.setColumnWidth(2, 32)
-        self.seq_table.setColumnWidth(3, 60)
-        self.seq_table.setColumnWidth(4, 35)
+        self.seq_table.setColumnWidth(1, 220)
+        self.seq_table.setColumnWidth(2, 70)
+        self.seq_table.setColumnWidth(3, 32)
+        self.seq_table.setColumnWidth(4, 60)
+        self.seq_table.setColumnWidth(5, 35)
         self.seq_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.seq_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.seq_table.verticalHeader().setVisible(False)
+        self.seq_table.horizontalHeader().setSectionsMovable(False)
         vbox.addWidget(self.seq_table)
         
         # Add command button
@@ -326,8 +345,7 @@ class SerialMonitorApp(QMainWindow):
         self.seq_start_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
         self.seq_start_btn.clicked.connect(self._toggle_sequence)
         vbox.addWidget(self.seq_start_btn)
-        
-        box.setFixedWidth(340)
+
         return box
 
     # ── Monitor ───────────────────────────────────────────────────────────────
@@ -486,6 +504,9 @@ class SerialMonitorApp(QMainWindow):
         self.seq_interval_spin.setValue(float(self.config.get("sequence_interval", 1.0)))
         self._set_combo(self.seq_mode_combo, self.config.get("sequence_mode", "Stop"))
         self._load_sequence_commands()
+        command_col_width = int(self.config.get("sequence_command_col_width", 220))
+        command_col_width = max(120, min(1000, command_col_width))
+        self.seq_table.setColumnWidth(1, command_col_width)
         
         # Load alerts
         self._alerts = self.config.get("alerts", [])
@@ -514,6 +535,11 @@ class SerialMonitorApp(QMainWindow):
         # Save sequence configuration
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
+        self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
+        if hasattr(self, "main_splitter"):
+            splitter_sizes = self.main_splitter.sizes()
+            if splitter_sizes:
+                self.config.set("sequence_panel_width", splitter_sizes[0])
         self._save_sequence_commands()
 
     def _save_config(self):
@@ -704,13 +730,19 @@ class SerialMonitorApp(QMainWindow):
         # Command column (editable)
         cmd_item = QTableWidgetItem("")
         self.seq_table.setItem(row, 1, cmd_item)
+
+        # Format column (ASCII/HEX)
+        fmt_combo = QComboBox()
+        fmt_combo.addItems(SEND_FMTS)
+        fmt_combo.setCurrentText("ASCII")
+        self.seq_table.setCellWidget(row, 2, fmt_combo)
         
         # Send button column
         btn_send = QPushButton("▶")
         btn_send.setFixedSize(28, 25)
         btn_send.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
         btn_send.clicked.connect(lambda: self._send_sequence_command_manual(row))
-        self.seq_table.setCellWidget(row, 2, btn_send)
+        self.seq_table.setCellWidget(row, 3, btn_send)
         
         # Move buttons column
         move_widget = QWidget()
@@ -727,14 +759,14 @@ class SerialMonitorApp(QMainWindow):
         
         move_layout.addWidget(btn_up)
         move_layout.addWidget(btn_down)
-        self.seq_table.setCellWidget(row, 3, move_widget)
+        self.seq_table.setCellWidget(row, 4, move_widget)
         
         # Delete button column
         btn_delete = QPushButton("✕")
         btn_delete.setFixedSize(30, 25)
         btn_delete.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
         btn_delete.clicked.connect(lambda: self._remove_sequence_command(row))
-        self.seq_table.setCellWidget(row, 4, btn_delete)
+        self.seq_table.setCellWidget(row, 5, btn_delete)
     
     def _remove_sequence_command(self, row: int):
         """Remove a command from the sequence"""
@@ -765,6 +797,16 @@ class SerialMonitorApp(QMainWindow):
         text2 = self.seq_table.item(row2, 1).text()
         self.seq_table.item(row1, 1).setText(text2)
         self.seq_table.item(row2, 1).setText(text1)
+
+        # Swap command formats
+        fmt1 = self._get_sequence_command_format(row1)
+        fmt2 = self._get_sequence_command_format(row2)
+        combo1 = self.seq_table.cellWidget(row1, 2)
+        combo2 = self.seq_table.cellWidget(row2, 2)
+        if combo1:
+            combo1.setCurrentText(fmt2)
+        if combo2:
+            combo2.setCurrentText(fmt1)
         
         self._update_sequence_numbers()
         self._reconnect_sequence_buttons()
@@ -773,12 +815,18 @@ class SerialMonitorApp(QMainWindow):
         """Update the number column after changes"""
         for i in range(self.seq_table.rowCount()):
             self.seq_table.item(i, 0).setText(str(i + 1))
+
+    def _get_sequence_command_format(self, row: int) -> str:
+        combo = self.seq_table.cellWidget(row, 2)
+        if combo and combo.currentText() in SEND_FMTS:
+            return combo.currentText()
+        return "ASCII"
     
     def _reconnect_sequence_buttons(self):
         """Reconnect all button signals after row changes"""
         for row in range(self.seq_table.rowCount()):
             # Reconnect send button
-            btn_send = self.seq_table.cellWidget(row, 2)
+            btn_send = self.seq_table.cellWidget(row, 3)
             if btn_send:
                 try:
                     btn_send.clicked.disconnect()
@@ -787,7 +835,7 @@ class SerialMonitorApp(QMainWindow):
                 btn_send.clicked.connect(lambda checked, r=row: self._send_sequence_command_manual(r))
             
             # Reconnect move buttons
-            move_widget = self.seq_table.cellWidget(row, 3)
+            move_widget = self.seq_table.cellWidget(row, 4)
             if move_widget:
                 layout = move_widget.layout()
                 btn_up = layout.itemAt(0).widget()
@@ -801,7 +849,7 @@ class SerialMonitorApp(QMainWindow):
                 btn_down.clicked.connect(lambda checked, r=row: self._move_sequence_command_down(r))
             
             # Reconnect delete button
-            btn_delete = self.seq_table.cellWidget(row, 4)
+            btn_delete = self.seq_table.cellWidget(row, 5)
             if btn_delete:
                 try:
                     btn_delete.clicked.disconnect()
@@ -883,8 +931,9 @@ class SerialMonitorApp(QMainWindow):
         
         # Send the command (reuse the existing send logic)
         eol = EOL_TX_MAP.get(self.eol_tx_combo.currentText(), b"\n")
+        fmt = self._get_sequence_command_format(index)
         try:
-            if self.send_fmt.currentText() == "HEX":
+            if fmt == "HEX":
                 payload = bytes.fromhex(cmd_text.replace(" ", ""))
             else:
                 payload = cmd_text.encode("utf-8")
@@ -922,8 +971,9 @@ class SerialMonitorApp(QMainWindow):
         
         # Send the command
         eol = EOL_TX_MAP.get(self.eol_tx_combo.currentText(), b"\n")
+        fmt = self._get_sequence_command_format(index)
         try:
-            if self.send_fmt.currentText() == "HEX":
+            if fmt == "HEX":
                 payload = bytes.fromhex(expanded.replace(" ", ""))
             else:
                 payload = expanded.encode("utf-8")
@@ -965,6 +1015,15 @@ class SerialMonitorApp(QMainWindow):
         for cmd in commands:
             row = self.seq_table.rowCount()
             self.seq_table.insertRow(row)
+
+            if isinstance(cmd, dict):
+                cmd_text = str(cmd.get("command", ""))
+                cmd_format = str(cmd.get("format", "ASCII"))
+            else:
+                cmd_text = str(cmd)
+                cmd_format = "ASCII"
+            if cmd_format not in SEND_FMTS:
+                cmd_format = "ASCII"
             
             # Number column
             num_item = QTableWidgetItem(str(row + 1))
@@ -973,15 +1032,21 @@ class SerialMonitorApp(QMainWindow):
             self.seq_table.setItem(row, 0, num_item)
             
             # Command column (editable)
-            cmd_item = QTableWidgetItem(cmd)
+            cmd_item = QTableWidgetItem(cmd_text)
             self.seq_table.setItem(row, 1, cmd_item)
+
+            # Format column (ASCII/HEX)
+            fmt_combo = QComboBox()
+            fmt_combo.addItems(SEND_FMTS)
+            fmt_combo.setCurrentText(cmd_format)
+            self.seq_table.setCellWidget(row, 2, fmt_combo)
             
             # Send button column
             btn_send = QPushButton("▶")
             btn_send.setFixedSize(28, 25)
             btn_send.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
             btn_send.clicked.connect(lambda checked, r=row: self._send_sequence_command_manual(r))
-            self.seq_table.setCellWidget(row, 2, btn_send)
+            self.seq_table.setCellWidget(row, 3, btn_send)
             
             # Move buttons column
             move_widget = QWidget()
@@ -998,14 +1063,14 @@ class SerialMonitorApp(QMainWindow):
             
             move_layout.addWidget(btn_up)
             move_layout.addWidget(btn_down)
-            self.seq_table.setCellWidget(row, 3, move_widget)
+            self.seq_table.setCellWidget(row, 4, move_widget)
             
             # Delete button column
             btn_delete = QPushButton("✕")
             btn_delete.setFixedSize(30, 25)
             btn_delete.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
             btn_delete.clicked.connect(lambda checked, r=row: self._remove_sequence_command(r))
-            self.seq_table.setCellWidget(row, 4, btn_delete)
+            self.seq_table.setCellWidget(row, 5, btn_delete)
     
     def _save_sequence_commands(self):
         """Save sequence commands from table to config"""
@@ -1013,7 +1078,10 @@ class SerialMonitorApp(QMainWindow):
         for row in range(self.seq_table.rowCount()):
             cmd_item = self.seq_table.item(row, 1)
             if cmd_item:
-                commands.append(cmd_item.text())
+                commands.append({
+                    "command": cmd_item.text(),
+                    "format": self._get_sequence_command_format(row)
+                })
         self.config.set("sequence_commands", commands)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1035,7 +1103,10 @@ class SerialMonitorApp(QMainWindow):
         for row in range(self.seq_table.rowCount()):
             cmd_item = self.seq_table.item(row, 1)
             if cmd_item:
-                commands.append(cmd_item.text())
+                commands.append({
+                    "command": cmd_item.text(),
+                    "format": self._get_sequence_command_format(row)
+                })
         
         data = {
             "commands": commands,
@@ -1071,7 +1142,18 @@ class SerialMonitorApp(QMainWindow):
             for cmd in data["commands"]:
                 self._add_sequence_command()
                 row = self.seq_table.rowCount() - 1
-                self.seq_table.item(row, 1).setText(cmd)
+                if isinstance(cmd, dict):
+                    cmd_text = str(cmd.get("command", ""))
+                    cmd_format = str(cmd.get("format", "ASCII"))
+                else:
+                    cmd_text = str(cmd)
+                    cmd_format = "ASCII"
+                if cmd_format not in SEND_FMTS:
+                    cmd_format = "ASCII"
+                self.seq_table.item(row, 1).setText(cmd_text)
+                fmt_combo = self.seq_table.cellWidget(row, 2)
+                if fmt_combo:
+                    fmt_combo.setCurrentText(cmd_format)
             
             # Load settings
             if "interval" in data:

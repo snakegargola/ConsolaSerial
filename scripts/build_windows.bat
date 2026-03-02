@@ -4,7 +4,11 @@ setlocal enabledelayedexpansion
 set ROOT_DIR=%~dp0\..
 pushd %ROOT_DIR%
 
-if "%PYTHON_BIN%"=="" set PYTHON_BIN=%ROOT_DIR%\GuisSerial\Scripts\python.exe
+if "%PYTHON_BIN%"=="" set PYTHON_BIN=%ROOT_DIR%\.venv\Scripts\python.exe
+if not exist "%PYTHON_BIN%" (
+  set PYTHON_BIN=%ROOT_DIR%\GuisSerial\Scripts\python.exe
+)
+
 if not exist "%PYTHON_BIN%" (
   set PYTHON_BIN=%ROOT_DIR%\GuisSerial\bin\python.exe
 )

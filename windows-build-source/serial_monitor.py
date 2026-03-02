@@ -104,7 +104,15 @@ class SerialMonitorApp(QMainWindow):
         
         # Create horizontal splitter for sequence panel and main content
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_sequence_panel())
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
+        splitter.setStyleSheet("QSplitter::handle { background-color: #3a3a3a; }")
+        self.main_splitter = splitter
+
+        seq_panel = self._build_sequence_panel()
+        seq_panel.setMinimumWidth(320)
+        seq_panel.setMaximumWidth(520)
+        splitter.addWidget(seq_panel)
         
         # Right side: monitor and send panel
         right_widget = QWidget()
@@ -113,11 +121,14 @@ class SerialMonitorApp(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(self._build_monitor(), stretch=1)
         right_layout.addWidget(self._build_send_panel())
+        right_widget.setMinimumWidth(420)
         
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 0)  # Sequence panel fixed width
-        splitter.setStretchFactor(1, 1)  # Monitor expands
-        splitter.setSizes([350, 800])    # Initial sizes
+        splitter.setStretchFactor(0, 0)  # Sequence panel compact
+        splitter.setStretchFactor(1, 1)  # Monitor/send expands
+        sequence_panel_width = int(self.config.get("sequence_panel_width", 360))
+        sequence_panel_width = max(320, min(520, sequence_panel_width))
+        splitter.setSizes([sequence_panel_width, 900])
         
         root.addWidget(splitter, stretch=1)
 
@@ -266,23 +277,29 @@ class SerialMonitorApp(QMainWindow):
         box = QGroupBox("Command Sequence")
         vbox = QVBoxLayout(box)
         vbox.setSpacing(4)
+        box.setMinimumWidth(320)
+        box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         
         # Command list table
         self.seq_table = QTableWidget()
         self.seq_table.setColumnCount(5)
         self.seq_table.setHorizontalHeaderLabels(["", "Command", "▶", "↑↓", "✕"])
-        self.seq_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.seq_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.seq_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.seq_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.seq_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header = self.seq_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        header.setMinimumSectionSize(28)
         self.seq_table.setColumnWidth(0, 30)
+        self.seq_table.setColumnWidth(1, 230)
         self.seq_table.setColumnWidth(2, 32)
         self.seq_table.setColumnWidth(3, 60)
         self.seq_table.setColumnWidth(4, 35)
         self.seq_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.seq_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.seq_table.verticalHeader().setVisible(False)
+        self.seq_table.horizontalHeader().setSectionsMovable(False)
         vbox.addWidget(self.seq_table)
         
         # Add command button
@@ -326,8 +343,7 @@ class SerialMonitorApp(QMainWindow):
         self.seq_start_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
         self.seq_start_btn.clicked.connect(self._toggle_sequence)
         vbox.addWidget(self.seq_start_btn)
-        
-        box.setFixedWidth(340)
+
         return box
 
     # ── Monitor ───────────────────────────────────────────────────────────────
@@ -486,6 +502,9 @@ class SerialMonitorApp(QMainWindow):
         self.seq_interval_spin.setValue(float(self.config.get("sequence_interval", 1.0)))
         self._set_combo(self.seq_mode_combo, self.config.get("sequence_mode", "Stop"))
         self._load_sequence_commands()
+        command_col_width = int(self.config.get("sequence_command_col_width", 220))
+        command_col_width = max(120, min(1000, command_col_width))
+        self.seq_table.setColumnWidth(1, command_col_width)
         
         # Load alerts
         self._alerts = self.config.get("alerts", [])
@@ -514,6 +533,11 @@ class SerialMonitorApp(QMainWindow):
         # Save sequence configuration
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
+        self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
+        if hasattr(self, "main_splitter"):
+            splitter_sizes = self.main_splitter.sizes()
+            if splitter_sizes:
+                self.config.set("sequence_panel_width", splitter_sizes[0])
         self._save_sequence_commands()
 
     def _save_config(self):

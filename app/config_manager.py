@@ -24,6 +24,8 @@ DEFAULT_CONFIG = {
     "sequence_commands": [],
     "sequence_interval": 1.0,
     "sequence_mode": "Stop",
+    "sequence_panel_width": 360,
+    "sequence_command_col_width": 220,
     "alerts": [],
     "quick_commands": {
         "F1": "",

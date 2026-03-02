@@ -4,6 +4,9 @@ Set-Location $RootDir
 
 $pythonBin = $env:PYTHON_BIN
 if ([string]::IsNullOrWhiteSpace($pythonBin)) {
+    $pythonBin = Join-Path $RootDir ".venv\Scripts\python.exe"
+}
+if (-not (Test-Path $pythonBin)) {
     $pythonBin = Join-Path $RootDir "GuisSerial\Scripts\python.exe"
 }
 if (-not (Test-Path $pythonBin)) {

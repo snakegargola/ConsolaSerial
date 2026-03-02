@@ -1,5 +1,5 @@
 {
-  "port": "/dev/ttyUSB0",
+  "port": "COM6",
   "baud": 115200,
   "databits": 8,
   "parity": "None",
@@ -20,14 +20,31 @@
   "auto_send_interval": 5.0,
   "send_format": "ASCII",
   "sequence_commands": [
-    "hola como estan",
-    "bueno dias a todos",
-    "buenas noches a todos",
-    "un palcer conocerlos",
-    "o que hermosa maravilla"
+    {
+      "command": "hola como estan",
+      "format": "ASCII"
+    },
+    {
+      "command": "bueno dias a todos",
+      "format": "ASCII"
+    },
+    {
+      "command": "buenas noches a todos",
+      "format": "ASCII"
+    },
+    {
+      "command": "un palcer conocerlos",
+      "format": "ASCII"
+    },
+    {
+      "command": "o que hermosa maravilla",
+      "format": "ASCII"
+    }
   ],
   "sequence_interval": 1.0,
   "sequence_mode": "Stop",
+  "sequence_panel_width": 520,
+  "sequence_command_col_width": 220,
   "alerts": [],
   "quick_commands": {
     "F1": "",
