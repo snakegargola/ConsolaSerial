@@ -29,10 +29,16 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 
 ### Secuencias de Comandos
 - **Lista ordenada de comandos** con reordenamiento ( ↑↓ )
+- **Formato por fila (`Fmt`)**: cada comando puede enviarse como `ASCII` o `HEX`
 - **Variables dinámicas**: `{timestamp}`, `{counter}`, `{random}`
 - **Modos de ejecución**: Stop o Restart al finalizar
 - **Resaltado visual** del comando en ejecución
 - **Exportar/Importar** secuencias en formato JSON
+
+Nota de uso para `HEX`:
+- Cuando `Fmt = HEX`, el campo `Command` debe contener bytes hexadecimales válidos.
+- Ejemplos válidos: `AA 55`, `01 03 00 00 00 02 C4 0B`.
+- Si escribes texto normal (por ejemplo `hola mundo`) con `Fmt = HEX`, la app mostrará advertencia de formato inválido.
 
 ### Monitoreo Avanzado
 - **🔍 Búsqueda en tiempo real** con navegación y resaltado
@@ -193,6 +199,12 @@ Ver instrucciones completas: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
 
 - Verificar que Python 3.12+ esté instalado
 - Reinstalar dependencias: `pip install -r requirements.txt --upgrade`
+
+### No envía en HEX desde secuencias
+
+- Verifica que en la columna `Fmt` esté seleccionado `HEX` en esa fila.
+- Escribe bytes hex válidos separados por espacios (ejemplo: `AA 55 0D 0A`).
+- Si necesitas enviar texto, usa `Fmt = ASCII`.
 
 ## Próximos Pasos
 
