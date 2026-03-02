@@ -686,6 +686,8 @@ class SerialMonitorApp(QMainWindow):
         self.tx_lbl.setText(f"TX: {self._human(self.worker.tx_bytes)}")
         self.config.add_to_history(text)
         self._update_history_combo()
+        if not self._auto_timer.isActive():
+            self.send_edit.clear()
 
     def _update_history_combo(self):
         history = self.config.get("cmd_history", [])
