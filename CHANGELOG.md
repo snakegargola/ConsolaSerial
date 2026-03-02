@@ -1,5 +1,22 @@
 # Historial de Cambios
 
+## v2.0.1 (2026-03-01) - Corrección HEX y release actualizado
+
+### 🛠️ Correcciones
+
+- Corregida la detección del formato de envío por fila en secuencias (`ASCII` / `HEX`).
+- Mejorada la validación de comandos en formato `HEX` para evitar envíos incorrectos.
+- Agregados mensajes de error más claros cuando una fila contiene bytes HEX inválidos.
+
+### 📦 Distribución
+
+- Recompilado ejecutable Windows onefile (`dist/windows/SerialMonitor.exe`) con el fix aplicado.
+- Publicado commit en `main` y tag `v1.0.1` para disparar la generación de binarios Windows/Linux en GitHub Actions.
+
+### 📝 Documentación
+
+- README actualizado con aclaraciones de uso de comandos HEX en secuencias.
+
 ## v2.0 (Actual) - Serial Monitor v2 Release
 
 ### ✨ Nuevas Características
