@@ -1,11 +1,87 @@
 import threading
+import os
 import serial
 import serial.tools.list_ports
+import re
+
+from .usb_bridge import product_for
 
 
 def list_ports():
     """Return list of available serial port names."""
     return [p.device for p in serial.tools.list_ports.comports()]
+
+
+def bridge_interface_for_port(port):
+    """Return the known bridge interface name for a PySerial port, if any."""
+    product = product_for(getattr(port, "vid", None), getattr(port, "pid", None))
+    if product is None:
+        return None
+    match = re.search(r"\.(\d+)$", getattr(port, "location", "") or "")
+    if match:
+        index = int(match.group(1)) + 1
+    elif len(product.interfaces) == 1:
+        index = 1
+    else:
+        # Composite FTDI devices normally expose the USB interface number in
+        # ``location``. Do not guess when multiple ports cannot be separated.
+        return None
+    if not 1 <= index <= len(product.interfaces):
+        return None
+    return chr(ord("A") + index - 1)
+
+
+def list_port_details(channel_modes=None, *, include_usb_bridges=True,
+                      only_bridge_interface=None, bridge_pid=None,
+                      bridge_serial=None, include_ft4232=None,
+                      only_ft4232_channel=None):
+    """Return friendly serial ports with optional USB-bridge filtering.
+
+    The two FT4232-named keyword arguments remain accepted for compatibility.
+    """
+    if include_ft4232 is not None:
+        include_usb_bridges = include_ft4232
+    if only_ft4232_channel is not None:
+        only_bridge_interface = only_ft4232_channel
+    channel_modes = channel_modes or {}
+    result = []
+    for port in serial.tools.list_ports.comports():
+        product = product_for(getattr(port, "vid", None), getattr(port, "pid", None))
+        channel = bridge_interface_for_port(port)
+        if product and not include_usb_bridges:
+            continue
+        if bridge_pid is not None and getattr(port, "pid", None) != int(bridge_pid):
+            continue
+        if bridge_serial and getattr(port, "serial_number", "") != bridge_serial:
+            continue
+        if only_bridge_interface and channel != str(only_bridge_interface).upper():
+            continue
+        if only_bridge_interface and product is None:
+            continue
+        if channel and channel_modes.get(channel, "UART") != "UART":
+            continue
+        access = os.name == "nt" or os.access(port.device, os.R_OK | os.W_OK)
+        warning = " — no permission" if not access else ""
+        if channel:
+            label = f"{product.model} interface {channel} — {port.device}{warning}"
+        else:
+            label = f"{port.device}{warning}"
+        result.append((label, port.device))
+    return result
+
+
+def list_ft4232_channel_ports(channel):
+    """Compatibility wrapper for legacy callers."""
+    return list_bridge_interface_ports(channel, bridge_pid=0x6011)
+
+
+def list_bridge_interface_ports(interface, *, bridge_pid=None, bridge_serial=None):
+    """Return VCP ports belonging to one detected adapter interface."""
+    return list_port_details(
+        only_bridge_interface=str(interface).upper(),
+        bridge_pid=bridge_pid,
+        bridge_serial=bridge_serial,
+    )
 
 
 class SerialWorker(threading.Thread):

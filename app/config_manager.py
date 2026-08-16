@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from copy import deepcopy
 
 DEFAULT_CONFIG = {
     "port": "",
@@ -27,6 +28,20 @@ DEFAULT_CONFIG = {
     "sequence_panel_width": 360,
     "sequence_command_col_width": 220,
     "alerts": [],
+    "i2c_device_url": "",
+    "i2c_channel": 1,
+    "i2c_frequency": 100000,
+    "usb_bridge_modes": {},
+    "usb_bridge_sessions": {},
+    # Legacy keys are retained so existing config.json files remain readable.
+    "ft4232_channel_a_mode": "I2C",
+    "ft4232_channel_b_mode": "I2C",
+    "ft4232_sessions": {
+        "A": {"uart": {}, "i2c": {}},
+        "B": {"uart": {}, "i2c": {}},
+        "C": {"uart": {}},
+        "D": {"uart": {}},
+    },
     "quick_commands": {
         "F1": "",
         "F2": "",
@@ -46,7 +61,7 @@ CONFIG_FILE = os.path.join(_BASE_DIR, "config.json")
 
 class ConfigManager:
     def __init__(self):
-        self.config = DEFAULT_CONFIG.copy()
+        self.config = deepcopy(DEFAULT_CONFIG)
         self.load()
 
     def load(self):
@@ -58,7 +73,7 @@ class ConfigManager:
                 for key, value in DEFAULT_CONFIG.items():
                     self.config[key] = data.get(key, value)
             except (json.JSONDecodeError, OSError):
-                self.config = DEFAULT_CONFIG.copy()
+                self.config = deepcopy(DEFAULT_CONFIG)
 
     def save(self):
         try:
@@ -80,3 +95,39 @@ class ConfigManager:
             history.remove(cmd)
         history.insert(0, cmd)
         self.config["cmd_history"] = history[:max_entries]
+
+
+class ScopedConfig:
+    """Expose one nested configuration dictionary through ConfigManager's API."""
+
+    def __init__(self, parent, path, defaults=None):
+        self.parent = parent
+        self.path = tuple(path)
+        self.defaults = deepcopy(defaults or {})
+
+    def _bucket(self):
+        bucket = self.parent.config
+        for key in self.path:
+            value = bucket.get(key)
+            if not isinstance(value, dict):
+                value = {}
+                bucket[key] = value
+            bucket = value
+        return bucket
+
+    def get(self, key, default=None):
+        fallback = self.defaults.get(key, default)
+        return self._bucket().get(key, deepcopy(fallback))
+
+    def set(self, key, value):
+        self._bucket()[key] = value
+
+    def save(self):
+        return self.parent.save()
+
+    def add_to_history(self, cmd, max_entries=20):
+        history = list(self.get("cmd_history", []))
+        if cmd in history:
+            history.remove(cmd)
+        history.insert(0, cmd)
+        self.set("cmd_history", history[:max_entries])

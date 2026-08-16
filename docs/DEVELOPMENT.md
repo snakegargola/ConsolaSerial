@@ -108,6 +108,21 @@ except serial.SerialException as e:
 
 ## Testing
 
+### Pruebas automatizadas
+
+Las conversiones I²C y la separación segura de páginas EEPROM no requieren
+hardware:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Antes de probar con un FT4232H también conviene validar sintaxis:
+
+```bash
+.venv/bin/python -m py_compile main.py app/*.py tests/*.py
+```
+
 ### Simulación de Puerto Serial
 ```python
 # Usar socat para crear puerto virtual
@@ -167,4 +182,3 @@ print(dir(obj))
 3. Compilar ejecutable: `bash scripts/build_linux.sh`
 4. Probar ejecutable: `./dist/linux/SerialMonitor`
 5. Hacer commit: `git add . && git commit -m "v2: descripción"`
-
