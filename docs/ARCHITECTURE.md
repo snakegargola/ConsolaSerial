@@ -12,6 +12,15 @@ SerialPython/
 │   ├── __init__.py
 │   ├── serial_monitor.py        # Ventana principal (PyQt6)
 │   ├── serial_worker.py         # Worker thread para comunicación serial
+│   ├── usb_bridge.py            # Catálogo y detección por capacidades
+│   ├── bridge_interface_manager.py # Arbitraje genérico por interfaz
+│   ├── i2c_worker.py            # Workers FTDI/I²C sin bloquear la GUI
+│   ├── i2c_device_inspector.py  # UI de registros, sensores y memorias
+│   ├── i2c_register_map.py      # Modelo versionado de perfiles de registros
+│   ├── i2c_register_map_widget.py # Editor/runner de mapas de registros
+│   ├── ft4232_channels.py       # Compatibilidad con imports anteriores
+│   ├── i2c_value_codec.py       # Conversiones puras de valores I²C
+│   ├── display_image_converter.py # Imágenes monocromáticas SSD1306
 │   ├── config_manager.py        # Gestión de configuración (JSON)
 │   └── log_manager.py           # Gestión de logs
 ├── assets/                      # Recursos (iconos, imágenes)
@@ -90,6 +99,33 @@ SerialPython/
 - Búsqueda en logs completos
 - Exportación de logs
 
+### 6. Módulos I²C
+
+- `i2c_device_inspector.py` contiene las pestañas de registros/sensores y
+  memorias. Emite solicitudes y no conoce PyFtdi.
+- `i2c_value_codec.py` implementa el pipeline de shift, máscara, extensión de
+  signo, escala y offset; se prueba sin hardware.
+- `i2c_register_map.py` valida el esquema JSON y mantiene los perfiles separados
+  de PyQt y PyFtdi; `i2c_register_map_widget.py` implementa su editor y runner.
+- `i2c_worker.py` posee el acceso USB en threads. Serializa escaneos,
+  transacciones de registro, páginas de memoria, SSD1306 y secuencias.
+- `serial_monitor.py` actúa como coordinador y mantiene una sola operación I²C
+  activa por vez.
+
+Consulta [`I2C.md`](I2C.md) para el flujo de usuario y las garantías de escritura
+en memorias.
+
+### 7. Sesiones USB Bridge concurrentes
+
+La ventana principal crea un workspace con tantas sesiones como interfaces
+declare el adaptador detectado. `usb_bridge.py` separa la identificación de
+hardware de la UI y describe sus capacidades.
+`UartSessionPanel` e `I2cSessionPanel` reutilizan las herramientas existentes,
+pero mantienen señales, timers y workers propios. `UsbBridgeInterfaceManager` evita
+asignaciones incompatibles dentro del mismo canal y permite que canales
+distintos trabajen en paralelo. `ScopedConfig` separa preferencias e historial
+por sesión. Consulta [`USB_BRIDGES.md`](USB_BRIDGES.md).
+
 ## Parámetros de Configuración Serial
 
 | Parámetro | Descripción | Valores |
@@ -167,4 +203,3 @@ Ver `requirements.txt` para versiones exactas.
 - Config.json se guarda después de cada cambio
 - Los logs se almacenan en memoria (lista completa)
 - Los tooltips se muestran automáticamente al hacer hover
-

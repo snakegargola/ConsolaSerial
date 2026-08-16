@@ -3,6 +3,8 @@ serial_monitor.py — Main application window (PyQt6).
 """
 
 import threading
+import os
+import getpass
 from datetime import datetime
 import json
 import random
@@ -16,13 +18,31 @@ from PyQt6.QtWidgets import (
     QColorDialog, QGroupBox, QSpinBox, QDoubleSpinBox, QToolBar,
     QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QTabWidget, QProgressBar,
+    QTabBar, QInputDialog, QStackedWidget,
 )
-from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPalette, QShortcut, QKeySequence, QAction
+from PyQt6.QtGui import (QColor, QFont, QTextCharFormat, QTextCursor, QPalette,
+                         QShortcut, QKeySequence, QAction, QImage, QPixmap,
+                         QPainter, QTransform)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 
-from .config_manager import ConfigManager
-from .serial_worker import SerialWorker, list_ports
+from .config_manager import ConfigManager, ScopedConfig, DEFAULT_CONFIG
+from .serial_worker import (
+    SerialWorker, list_port_details, list_bridge_interface_ports,
+)
+from .i2c_worker import (
+    I2cScanWorker, I2cTransactionWorker, Ssd1306Worker, I2cRawWriteWorker,
+    I2cSequenceWorker, I2cMemoryWorker, list_i2c_bridge_devices,
+    ssd1306_init_steps,
+)
 from .log_manager import LogManager
+from .display_image_converter import convert_image
+from .i2c_device_inspector import I2cDeviceInspector
+from .bridge_interface_manager import (
+    InterfaceBusyError, UsbBridgeInterfaceManager,
+)
+from .usb_bridge import (
+    I2C, UART, capability_summary, discover_usb_bridges,
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 BAUD_RATES = ["300","1200","2400","4800","9600","19200","38400","57600",
@@ -40,17 +60,49 @@ SEND_FMTS  = ["ASCII","HEX"]
 class _Signals(QObject):
     data_received = pyqtSignal(bytes)
     error_occurred = pyqtSignal(str)
+    i2c_found = pyqtSignal(int)
+    i2c_progress = pyqtSignal(int, int)
+    i2c_done = pyqtSignal(list, bool, float)
+    i2c_error = pyqtSignal(str)
+    i2c_inspector_error = pyqtSignal(str, object)
+    i2c_transaction_done = pyqtSignal(str, bytes, object)
+    i2c_memory_done = pyqtSignal(str, bytes)
+    i2c_display_done = pyqtSignal(str)
+    i2c_sequence_step = pyqtSignal(int)
+    i2c_sequence_done = pyqtSignal(bool)
 
 
 class SerialMonitorApp(QMainWindow):
     def __init__(self, config: ConfigManager):
         super().__init__()
         self.config = config
+        if not hasattr(self, "channel_manager"):
+            self.usb_bridge_detection_error = ""
+            try:
+                self.usb_bridge_adapters = discover_usb_bridges()
+            except Exception as exc:
+                self.usb_bridge_adapters = []
+                self.usb_bridge_detection_error = str(exc)
+            self.active_bridge = (
+                self.usb_bridge_adapters[0] if self.usb_bridge_adapters else None
+            )
+            self.channel_manager = UsbBridgeInterfaceManager(capabilities={})
         self.worker: SerialWorker | None = None
+        self.i2c_worker: I2cScanWorker | None = None
         self.log = LogManager()
         self._signals = _Signals()
         self._signals.data_received.connect(self._display_rx)
         self._signals.error_occurred.connect(self._handle_error)
+        self._signals.i2c_found.connect(self._i2c_device_found)
+        self._signals.i2c_progress.connect(self._i2c_scan_progress)
+        self._signals.i2c_done.connect(self._i2c_scan_done)
+        self._signals.i2c_error.connect(self._i2c_scan_error)
+        self._signals.i2c_inspector_error.connect(self._i2c_inspector_error)
+        self._signals.i2c_transaction_done.connect(self._i2c_transaction_done)
+        self._signals.i2c_memory_done.connect(self._i2c_memory_done)
+        self._signals.i2c_display_done.connect(self._i2c_display_done)
+        self._signals.i2c_sequence_step.connect(self._i2c_sequence_step_done)
+        self._signals.i2c_sequence_done.connect(self._i2c_sequence_finished)
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._send_data)
         
@@ -99,40 +151,551 @@ class SerialMonitorApp(QMainWindow):
         root = QVBoxLayout(central)
         root.setSpacing(4)
         root.setContentsMargins(6, 6, 6, 4)
+        root.addWidget(self._build_usb_bridge_mode_panel())
+        self.main_tabs = QTabWidget()
+        root.addWidget(self.main_tabs, stretch=1)
 
-        root.addWidget(self._build_config_panel())
-        
-        # Create horizontal splitter for sequence panel and main content
+        serial_tab = QWidget()
+        serial_root = QVBoxLayout(serial_tab)
+        serial_root.setSpacing(4)
+        serial_root.setContentsMargins(0, 0, 0, 0)
+        serial_root.addWidget(self._build_config_panel())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(10)
         splitter.setStyleSheet("QSplitter::handle { background-color: #3a3a3a; }")
         self.main_splitter = splitter
+        sequence = self._build_sequence_panel()
+        sequence.setMinimumWidth(320)
+        sequence.setMaximumWidth(520)
+        splitter.addWidget(sequence)
+        right = QWidget()
+        right_root = QVBoxLayout(right)
+        right_root.setSpacing(4)
+        right_root.setContentsMargins(0, 0, 0, 0)
+        right_root.addWidget(self._build_monitor(), stretch=1)
+        right_root.addWidget(self._build_send_panel())
+        right.setMinimumWidth(420)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(1, 1)
+        width = max(320, min(520, int(self.config.get("sequence_panel_width", 360))))
+        splitter.setSizes([width, 900])
+        serial_root.addWidget(splitter, stretch=1)
 
-        seq_panel = self._build_sequence_panel()
-        seq_panel.setMinimumWidth(320)
-        seq_panel.setMaximumWidth(520)
-        splitter.addWidget(seq_panel)
-        
-        # Right side: monitor and send panel
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setSpacing(4)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(self._build_monitor(), stretch=1)
-        right_layout.addWidget(self._build_send_panel())
-        right_widget.setMinimumWidth(420)
-        
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 0)  # Sequence panel compact
-        splitter.setStretchFactor(1, 1)  # Monitor/send expands
-        sequence_panel_width = int(self.config.get("sequence_panel_width", 360))
-        sequence_panel_width = max(320, min(520, sequence_panel_width))
-        splitter.setSizes([sequence_panel_width, 900])
-        
-        root.addWidget(splitter, stretch=1)
-
+        self.main_tabs.addTab(serial_tab, "USB Serial / General")
+        self.main_tabs.addTab(self._build_usb_bridge_workspace(), "USB Bridge")
         self._build_status_bar()
+        self.main_tabs.currentChanged.connect(
+            lambda index: self.statusBar().setVisible(index == 0)
+        )
+
+    def _build_usb_bridge_mode_panel(self):
+        box = QGroupBox("USB protocol bridge — detected capabilities")
+        outer = QVBoxLayout(box)
+        selector = QHBoxLayout()
+        selector.addWidget(QLabel("Adapter:"))
+        self.usb_bridge_combo = QComboBox()
+        for bridge in self.usb_bridge_adapters:
+            self.usb_bridge_combo.addItem(bridge.label, bridge)
+        if not self.usb_bridge_adapters:
+            message = self.usb_bridge_detection_error or "No supported adapter detected"
+            self.usb_bridge_combo.addItem(message, None)
+        selector.addWidget(self.usb_bridge_combo, stretch=1)
+        refresh = QPushButton("Refresh adapters")
+        refresh.clicked.connect(self._refresh_usb_bridges)
+        selector.addWidget(refresh)
+        outer.addLayout(selector)
+        self.usb_bridge_capabilities = QLabel()
+        self.usb_bridge_capabilities.setWordWrap(True)
+        outer.addWidget(self.usb_bridge_capabilities)
+        self.usb_bridge_modes_widget = QWidget()
+        self.usb_bridge_modes_layout = QHBoxLayout(self.usb_bridge_modes_widget)
+        self.usb_bridge_modes_layout.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.usb_bridge_modes_widget)
+        self.usb_bridge_combo.currentIndexChanged.connect(
+            self._usb_bridge_adapter_changed
+        )
+        return box
+
+    def _build_usb_bridge_workspace(self):
+        """Create sessions from the interfaces advertised by the adapter."""
+        workspace = QWidget()
+        root = QVBoxLayout(workspace)
+        self.usb_bridge_note = QLabel()
+        self.usb_bridge_note.setWordWrap(True)
+        root.addWidget(self.usb_bridge_note)
+        self.usb_bridge_channel_tabs = QTabWidget()
+        root.addWidget(self.usb_bridge_channel_tabs, stretch=1)
+        self._rebuild_usb_bridge_workspace()
+        return workspace
+
+    @staticmethod
+    def _clear_layout(layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _rebuild_usb_bridge_workspace(self):
+        """Recreate interface panels after selecting a physical adapter."""
+        for session in getattr(self, "usb_bridge_uart_sessions", {}).values():
+            session.shutdown_session()
+        for session in getattr(self, "usb_bridge_i2c_sessions", {}).values():
+            session.shutdown_session()
+        self.usb_bridge_channel_tabs.clear()
+        self._clear_layout(self.usb_bridge_modes_layout)
+        self.usb_bridge_mode_combos = {}
+        self.usb_bridge_channel_stacks = {}
+        self.usb_bridge_uart_sessions = {}
+        self.usb_bridge_i2c_sessions = {}
+        bridge = self.usb_bridge_combo.currentData()
+        self.active_bridge = bridge
+        if bridge is None:
+            self.channel_manager = UsbBridgeInterfaceManager(capabilities={})
+            self.usb_bridge_capabilities.setText(
+                "Connect a supported bridge and press Refresh adapters."
+            )
+            self.usb_bridge_note.setText(
+                "The general USB serial tab remains available for ordinary adapters."
+            )
+            return
+
+        capabilities = {
+            interface.name: interface.capabilities
+            for interface in bridge.interfaces
+        }
+        saved_modes = self.config.get("usb_bridge_modes", {}).get(bridge.key, {})
+        if not saved_modes and bridge.pid in (0x6011, 0x6043, 0x6048):
+            saved_modes = {
+                "A": self.config.get("ft4232_channel_a_mode", I2C),
+                "B": self.config.get("ft4232_channel_b_mode", I2C),
+            }
+        requested_modes = {}
+        for interface in bridge.interfaces:
+            default_mode = I2C if I2C in interface.capabilities else UART
+            requested = str(saved_modes.get(interface.name, default_mode)).upper()
+            implemented = {UART, I2C} & interface.capabilities
+            requested_modes[interface.name] = (
+                requested if requested in implemented else default_mode
+            )
+        self.channel_manager = UsbBridgeInterfaceManager(
+            requested_modes, capabilities=capabilities
+        )
+        self.usb_bridge_capabilities.setText(
+            f"Detected: {bridge.label} — {capability_summary(bridge)}"
+        )
+        self.usb_bridge_note.setText(
+            "Each interface is independent. Only capabilities reported for this "
+            "chip are shown. SPI/JTAG/GPIO are identified now and their panels "
+            "will become selectable when those tools are added."
+        )
+
+        for interface in bridge.interfaces:
+            channel = interface.name
+            implemented = [
+                protocol for protocol in (UART, I2C)
+                if protocol in interface.capabilities
+            ]
+            self.usb_bridge_modes_layout.addWidget(QLabel(f"Interface {channel}:"))
+            combo = QComboBox()
+            combo.addItems(implemented)
+            combo.setCurrentText(self.channel_manager.mode(channel))
+            combo.currentTextChanged.connect(self._usb_bridge_modes_changed)
+            self.usb_bridge_modes_layout.addWidget(combo)
+            self.usb_bridge_mode_combos[channel] = combo
+
+            page = QWidget()
+            page_root = QVBoxLayout(page)
+            page_root.setContentsMargins(0, 0, 0, 0)
+            stack = QStackedWidget()
+            self.usb_bridge_channel_stacks[channel] = stack
+            if UART in interface.capabilities:
+                uart_config = ScopedConfig(
+                    self.config,
+                    ("usb_bridge_sessions", bridge.key, channel, "uart"),
+                    DEFAULT_CONFIG,
+                )
+                uart = UartSessionPanel(
+                    interface, bridge, uart_config, self.channel_manager
+                )
+                self.usb_bridge_uart_sessions[channel] = uart
+                stack.addWidget(uart)
+            if I2C in interface.capabilities:
+                i2c_config = ScopedConfig(
+                    self.config,
+                    ("usb_bridge_sessions", bridge.key, channel, "i2c"),
+                    DEFAULT_CONFIG,
+                )
+                i2c = I2cSessionPanel(
+                    interface, bridge, i2c_config, self.channel_manager
+                )
+                self.usb_bridge_i2c_sessions[channel] = i2c
+                stack.addWidget(i2c)
+            page_root.addWidget(stack)
+            self.usb_bridge_channel_tabs.addTab(page, f"Interface {channel}")
+        self.usb_bridge_modes_layout.addStretch()
+        self._apply_usb_bridge_workspace_modes(show_error=False)
+
+    def _apply_usb_bridge_workspace_modes(self, show_error=True):
+        """Switch a panel only when its outgoing session is idle."""
+        if not hasattr(self, "usb_bridge_channel_stacks"):
+            return
+        for tab_index, (channel, combo) in enumerate(
+            self.usb_bridge_mode_combos.items()
+        ):
+            desired = combo.currentText().upper()
+            current = self.channel_manager.mode(channel)
+            if desired != current:
+                current_session = (
+                    self.usb_bridge_uart_sessions[channel]
+                    if current == UART else self.usb_bridge_i2c_sessions[channel]
+                )
+                if current_session.is_session_active():
+                    combo.blockSignals(True)
+                    combo.setCurrentText(current)
+                    combo.blockSignals(False)
+                    if show_error:
+                        QMessageBox.warning(
+                            self, "Adapter interface busy",
+                            f"Disconnect or stop interface {channel} before changing "
+                            f"from {current} to {desired}.",
+                        )
+                    desired = current
+                else:
+                    current_session.shutdown_session()
+                    try:
+                        self.channel_manager.set_mode(channel, desired)
+                    except InterfaceBusyError as exc:
+                        combo.blockSignals(True)
+                        combo.setCurrentText(current)
+                        combo.blockSignals(False)
+                        if show_error:
+                            QMessageBox.warning(self, "Adapter interface busy", str(exc))
+                        desired = current
+            stack = self.usb_bridge_channel_stacks[channel]
+            target = (
+                self.usb_bridge_uart_sessions.get(channel)
+                if desired == UART else self.usb_bridge_i2c_sessions.get(channel)
+            )
+            stack.setCurrentWidget(target)
+            if desired == I2C:
+                target.activate_session()
+            self.usb_bridge_channel_tabs.setTabText(
+                tab_index, f"Interface {channel} — {desired}"
+            )
+
+    def _build_i2c_tab(self):
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+        config_box = QGroupBox("USB bridge MPSSE configuration")
+        grid = QGridLayout(config_box)
+        grid.addWidget(QLabel("Device:"), 0, 0)
+        self.i2c_device_combo = QComboBox()
+        self.i2c_device_combo.setToolTip("Detected USB bridges with I²C capability")
+        grid.addWidget(self.i2c_device_combo, 0, 1, 1, 2)
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh_i2c_devices)
+        grid.addWidget(refresh, 0, 3)
+        grid.addWidget(QLabel("Channel:"), 1, 0)
+        self.i2c_channel_combo = QComboBox()
+        self.i2c_channel_combo.addItem("A (MPSSE interface 1)", 1)
+        self.i2c_channel_combo.addItem("B (MPSSE interface 2)", 2)
+        grid.addWidget(self.i2c_channel_combo, 1, 1)
+        grid.addWidget(QLabel("Clock:"), 1, 2)
+        self.i2c_frequency_combo = QComboBox()
+        self.i2c_frequency_combo.addItem("100 kHz", 100_000)
+        self.i2c_frequency_combo.addItem("400 kHz", 400_000)
+        grid.addWidget(self.i2c_frequency_combo, 1, 3)
+        addressing = QLabel("Device addressing: 7-bit")
+        addressing.setStyleSheet("font-weight:bold; color:#2E8B57;")
+        grid.addWidget(addressing, 2, 0, 1, 4)
+        root.addWidget(config_box)
+
+        wiring = QLabel(
+            "MPSSE wiring: xDBUS0 = SCL, xDBUS1 + xDBUS2 = SDA. Use pull-up "
+            "resistors on SCL/SDA; x is the selected interface letter."
+        )
+        wiring.setWordWrap(True)
+        root.addWidget(wiring)
+
+        self.i2c_tools_tabs = QTabWidget()
+        scanner_tab = QWidget()
+        scanner_root = QVBoxLayout(scanner_tab)
+        read_write_tab = QWidget()
+        read_write_root = QVBoxLayout(read_write_tab)
+        display_tab = QWidget()
+        display_root = QVBoxLayout(display_tab)
+        trace_tab = QWidget()
+        trace_root = QVBoxLayout(trace_tab)
+        self.i2c_tools_tabs.addTab(scanner_tab, "Scanner")
+        self.i2c_tools_tabs.addTab(read_write_tab, "Device Inspector")
+        self.i2c_tools_tabs.addTab(display_tab, "Display Test")
+        self.i2c_tools_tabs.addTab(trace_tab, "Sequence Builder")
+        root.addWidget(self.i2c_tools_tabs, stretch=1)
+
+        controls = QHBoxLayout()
+        self.i2c_scan_btn = QPushButton("Scan I²C bus")
+        self.i2c_scan_btn.clicked.connect(self._toggle_i2c_scan)
+        controls.addWidget(self.i2c_scan_btn)
+        self.i2c_progress_bar = QProgressBar()
+        self.i2c_progress_bar.setRange(0, 117)
+        controls.addWidget(self.i2c_progress_bar, stretch=1)
+        scanner_root.addLayout(controls)
+        self.i2c_matrix = QTableWidget(8, 16)
+        self.i2c_matrix.setHorizontalHeaderLabels([f"{value:X}" for value in range(16)])
+        self.i2c_matrix.setVerticalHeaderLabels([f"{value:02X}:" for value in range(0, 0x80, 0x10)])
+        self.i2c_matrix.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.i2c_matrix.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.i2c_matrix.cellClicked.connect(self._i2c_matrix_address_clicked)
+        self.i2c_matrix.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.i2c_matrix.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.i2c_matrix.setFont(QFont("Courier New", 10))
+        scanner_root.addWidget(self.i2c_matrix, stretch=1)
+        self.i2c_summary = QLabel("Press Scan I²C bus to search addresses 0x03–0x77.")
+        self.i2c_summary.setWordWrap(True)
+        scanner_root.addWidget(self.i2c_summary)
+
+        self.i2c_device_inspector = I2cDeviceInspector()
+        self.i2c_device_inspector.register_read_requested.connect(
+            lambda request: self._start_i2c_inspector_transaction("read", request)
+        )
+        self.i2c_device_inspector.register_write_requested.connect(
+            lambda request: self._start_i2c_inspector_transaction("write", request)
+        )
+        self.i2c_device_inspector.memory_read_requested.connect(
+            lambda request: self._start_i2c_memory_operation("read", request)
+        )
+        self.i2c_device_inspector.memory_write_requested.connect(
+            lambda request: self._start_i2c_memory_operation("write", request)
+        )
+        read_write_root.addWidget(self.i2c_device_inspector)
+
+        display_box = QGroupBox("SSD1306 quick test")
+        display = QGridLayout(display_box)
+        display.addWidget(QLabel("Address:"), 0, 0)
+        self.i2c_display_address = QComboBox()
+        self.i2c_display_address.setEditable(True)
+        self.i2c_display_address.setCurrentText("0x3C")
+        display.addWidget(self.i2c_display_address, 0, 1)
+        display.addWidget(QLabel("Controller:"), 0, 2)
+        self.i2c_display_controller = QComboBox()
+        self.i2c_display_controller.addItem("SSD1306")
+        self.i2c_display_controller.addItem("Custom / Unknown")
+        display.addWidget(self.i2c_display_controller, 0, 3)
+        display.addWidget(QLabel("Resolution:"), 0, 4)
+        self.i2c_display_resolution = QComboBox()
+        self.i2c_display_resolution.addItem("128 × 64", (128, 64))
+        self.i2c_display_resolution.addItem("128 × 32", (128, 32))
+        display.addWidget(self.i2c_display_resolution, 0, 5)
+
+        display_actions = (
+            ("Initialize", "initialize"), ("Clear", "clear"),
+            ("All pixels", "all_on"), ("Border", "border"),
+            ("Grid", "grid"), ("Bars", "bars"),
+            ("Invert", "invert"), ("Normal", "normal"),
+            ("Display ON", "display_on"), ("Display OFF", "display_off"),
+        )
+        self.i2c_display_buttons = []
+        for index, (label, action) in enumerate(display_actions):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, selected=action: self._start_i2c_display_test(selected)
+            )
+            display.addWidget(button, 1 + index // 5, index % 5)
+            self.i2c_display_buttons.append(button)
+        self.i2c_display_status = QLabel(
+            "Select an address, initialize the display, then try a test pattern."
+        )
+        self.i2c_display_status.setWordWrap(True)
+        display.addWidget(self.i2c_display_status, 3, 0, 1, 6)
+        warning = QLabel(
+            "Use only with SSD1306-compatible displays. A wrong controller preset "
+            "may produce no image or unexpected commands."
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet("color:#CC8800;")
+        display.addWidget(warning, 4, 0, 1, 6)
+        display.addWidget(QLabel("Text:"), 5, 0)
+        self.i2c_display_text = QLineEdit("Hello I2C")
+        display.addWidget(self.i2c_display_text, 5, 1, 1, 2)
+        display.addWidget(QLabel("Font:"), 5, 3)
+        self.i2c_display_font_size = QSpinBox()
+        self.i2c_display_font_size.setRange(6, 48)
+        self.i2c_display_font_size.setValue(14)
+        display.addWidget(self.i2c_display_font_size, 5, 4)
+        preview_text = QPushButton("Preview text")
+        preview_text.clicked.connect(self._preview_i2c_display_text)
+        display.addWidget(preview_text, 5, 5)
+        load_image = QPushButton("Load image")
+        load_image.clicked.connect(self._load_i2c_display_image)
+        display.addWidget(load_image, 6, 0)
+        display.addWidget(QLabel("Brightness:"), 6, 1)
+        self.i2c_image_threshold = QSpinBox()
+        self.i2c_image_threshold.setRange(0, 255)
+        self.i2c_image_threshold.setValue(128)
+        display.addWidget(self.i2c_image_threshold, 6, 2)
+        self.i2c_image_invert = QCheckBox("Invert pixels")
+        display.addWidget(self.i2c_image_invert, 6, 3)
+        self.i2c_image_auto_background = QCheckBox("Auto dark background")
+        self.i2c_image_auto_background.setChecked(True)
+        display.addWidget(self.i2c_image_auto_background, 6, 4)
+        send_canvas = QPushButton("Send preview")
+        send_canvas.clicked.connect(self._send_i2c_display_canvas)
+        display.addWidget(send_canvas, 6, 5)
+        example_text = QPushButton("Example text")
+        example_text.clicked.connect(self._load_i2c_example_text)
+        display.addWidget(example_text, 7, 0, 1, 2)
+        example_image = QPushButton("Example image")
+        example_image.clicked.connect(self._load_i2c_example_image)
+        display.addWidget(example_image, 7, 2, 1, 2)
+        example_hint = QLabel("Built-in examples: preview them, then press Send preview.")
+        display.addWidget(example_hint, 7, 4, 1, 2)
+        display.addWidget(QLabel("Conversion:"), 8, 0)
+        self.i2c_image_conversion = QComboBox()
+        self.i2c_image_conversion.addItems([
+            "Floyd-Steinberg (best detail)", "Threshold (sharp)"
+        ])
+        display.addWidget(self.i2c_image_conversion, 8, 1, 1, 2)
+        display.addWidget(QLabel("Scaling:"), 8, 3)
+        self.i2c_image_scaling = QComboBox()
+        self.i2c_image_scaling.addItems([
+            "Stretch to 128×64 (whole image)",
+            "Fit whole image (keep proportions)",
+            "Fill / crop (detail)",
+        ])
+        display.addWidget(self.i2c_image_scaling, 8, 4, 1, 2)
+        display.addWidget(QLabel("Orientation:"), 9, 0)
+        self.i2c_display_orientation = QComboBox()
+        self.i2c_display_orientation.addItem("Horizontal (128×64)", "horizontal")
+        self.i2c_display_orientation.addItem(
+            "Vertical clockwise (64×128)", "clockwise"
+        )
+        self.i2c_display_orientation.addItem(
+            "Vertical counter-clockwise (64×128)", "counter_clockwise"
+        )
+        display.addWidget(self.i2c_display_orientation, 9, 1, 1, 3)
+        orientation_hint = QLabel("Vertical modes are for a physically rotated display.")
+        display.addWidget(orientation_hint, 9, 4, 1, 2)
+        self.i2c_display_preview = QLabel("No preview")
+        self.i2c_display_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.i2c_display_preview.setMinimumSize(256, 128)
+        self.i2c_display_preview.setStyleSheet("background:#000; color:#888; border:1px solid #555;")
+        display.addWidget(self.i2c_display_preview, 10, 0, 1, 6)
+        self._i2c_loaded_image_path = None
+        self._i2c_source_image = None
+        self._i2c_source_light_background = None
+        self._i2c_source_is_binary = False
+        self._i2c_canvas_image = None
+        self._i2c_preview_kind = None
+        self.i2c_image_threshold.valueChanged.connect(self._image_conversion_controls_changed)
+        self.i2c_image_invert.toggled.connect(self._refresh_i2c_binary_preview)
+        self.i2c_image_auto_background.toggled.connect(self._image_conversion_controls_changed)
+        self.i2c_image_conversion.currentTextChanged.connect(self._image_conversion_controls_changed)
+        self.i2c_image_scaling.currentTextChanged.connect(self._rebuild_i2c_loaded_image)
+        self.i2c_display_orientation.currentIndexChanged.connect(
+            self._image_orientation_changed
+        )
+        display_root.addWidget(display_box)
+        display_root.addStretch()
+
+        trace_config = QHBoxLayout()
+        trace_config.addWidget(QLabel("Address:"))
+        self.i2c_sequence_address = QComboBox()
+        self.i2c_sequence_address.setEditable(True)
+        self.i2c_sequence_address.setCurrentText("0x3C")
+        trace_config.addWidget(self.i2c_sequence_address)
+        trace_config.addWidget(QLabel("Command prefix:"))
+        self.i2c_command_prefix = QLineEdit("00")
+        self.i2c_command_prefix.setFixedWidth(70)
+        trace_config.addWidget(self.i2c_command_prefix)
+        trace_config.addWidget(QLabel("Data prefix:"))
+        self.i2c_data_prefix = QLineEdit("40")
+        self.i2c_data_prefix.setFixedWidth(70)
+        trace_config.addWidget(self.i2c_data_prefix)
+        trace_config.addWidget(QLabel("Use Raw for no prefix"))
+        trace_config.addStretch()
+        trace_root.addLayout(trace_config)
+
+        trace_toolbar = QHBoxLayout()
+        load_trace = QPushButton("Load SSD1306 preset")
+        load_trace.clicked.connect(self._load_ssd1306_trace)
+        add_trace = QPushButton("Add step")
+        add_trace.clicked.connect(self._add_i2c_trace_step)
+        remove_trace = QPushButton("Remove")
+        remove_trace.clicked.connect(self._remove_i2c_trace_step)
+        move_up = QPushButton("↑")
+        move_up.clicked.connect(lambda: self._move_i2c_trace_step(-1))
+        move_down = QPushButton("↓")
+        move_down.clicked.connect(lambda: self._move_i2c_trace_step(1))
+        run_step = QPushButton("Run selected step")
+        run_step.clicked.connect(self._run_i2c_trace_step)
+        self.i2c_run_sequence_btn = QPushButton("Run all")
+        self.i2c_run_sequence_btn.clicked.connect(self._toggle_i2c_sequence)
+        export_json = QPushButton("Export JSON")
+        export_json.clicked.connect(lambda: self._export_i2c_trace("json"))
+        export_c = QPushButton("Export C array")
+        export_c.clicked.connect(lambda: self._export_i2c_trace("c"))
+        trace_toolbar.addWidget(load_trace)
+        trace_toolbar.addWidget(add_trace)
+        trace_toolbar.addWidget(remove_trace)
+        trace_toolbar.addWidget(move_up)
+        trace_toolbar.addWidget(move_down)
+        trace_toolbar.addWidget(run_step)
+        trace_toolbar.addWidget(self.i2c_run_sequence_btn)
+        trace_toolbar.addWidget(export_json)
+        trace_toolbar.addWidget(export_c)
+        trace_toolbar.addStretch()
+        trace_root.addLayout(trace_toolbar)
+        profile_toolbar = QHBoxLayout()
+        self.i2c_profile_tabs = QTabBar()
+        self.i2c_profile_tabs.setTabsClosable(True)
+        self.i2c_profile_tabs.setMovable(False)
+        self.i2c_profile_tabs.currentChanged.connect(self._switch_i2c_profile)
+        self.i2c_profile_tabs.tabCloseRequested.connect(self._close_i2c_profile)
+        profile_toolbar.addWidget(self.i2c_profile_tabs, stretch=1)
+        new_profile = QPushButton("New profile")
+        new_profile.clicked.connect(self._new_i2c_profile)
+        duplicate_profile = QPushButton("Duplicate")
+        duplicate_profile.clicked.connect(self._duplicate_i2c_profile)
+        rename_profile = QPushButton("Rename")
+        rename_profile.clicked.connect(self._rename_i2c_profile)
+        save_profile = QPushButton("Save profile")
+        save_profile.clicked.connect(self._save_i2c_profile)
+        open_profile = QPushButton("Open profile")
+        open_profile.clicked.connect(self._open_i2c_profile)
+        for button in (new_profile, duplicate_profile, rename_profile,
+                       save_profile, open_profile):
+            profile_toolbar.addWidget(button)
+        trace_root.addLayout(profile_toolbar)
+        self.i2c_trace_table = QTableWidget(0, 5)
+        self.i2c_trace_table.setHorizontalHeaderLabels(
+            ["Step", "Action", "Type", "Bytes / delay ms", "Notes"]
+        )
+        trace_header = self.i2c_trace_table.horizontalHeader()
+        trace_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        trace_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        trace_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        trace_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        trace_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.i2c_trace_table.setColumnWidth(3, 180)
+        self.i2c_trace_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.i2c_trace_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        trace_root.addWidget(self.i2c_trace_table, stretch=1)
+        self.i2c_trace_status = QLabel(
+            "Build a sequence from the display datasheet, or load the SSD1306 preset. "
+            "Types: Command, Data, Raw, Delay."
+        )
+        self.i2c_trace_status.setWordWrap(True)
+        trace_root.addWidget(self.i2c_trace_status)
+        self._i2c_profiles = []
+        self._i2c_active_profile = -1
+        self._i2c_profile_switching = False
+        self._new_i2c_profile("SSD1306 Example", load_preset=True)
+        self._reset_i2c_matrix()
+        self._refresh_i2c_devices()
+        self.i2c_device_combo.currentIndexChanged.connect(self._clear_i2c_scanned_addresses)
+        self.i2c_channel_combo.currentIndexChanged.connect(self._clear_i2c_scanned_addresses)
+        return tab
 
     # ── Config panel ──────────────────────────────────────────────────────────
     def _build_config_panel(self):
@@ -485,7 +1048,7 @@ class SerialMonitorApp(QMainWindow):
 
     def _load_config_into_ui(self):
         self._refresh_ports()
-        self._set_combo(self.port_combo, self.config.get("port", ""))
+        self._set_combo_data(self.port_combo, self.config.get("port", ""))
         self._set_combo(self.baud_combo, str(self.config.get("baud", 115200)))
         self._set_combo(self.databits_combo, str(self.config.get("databits", 8)))
         self._set_combo(self.parity_combo, self.config.get("parity", "None"))
@@ -499,23 +1062,21 @@ class SerialMonitorApp(QMainWindow):
         self._set_combo(self.send_fmt, self.config.get("send_format", "ASCII"))
         self.interval_spin.setValue(float(self.config.get("auto_send_interval", 1.0)))
         self._update_history_combo()
-        
-        # Load sequence configuration
         self.seq_interval_spin.setValue(float(self.config.get("sequence_interval", 1.0)))
         self._set_combo(self.seq_mode_combo, self.config.get("sequence_mode", "Stop"))
         self._load_sequence_commands()
-        command_col_width = int(self.config.get("sequence_command_col_width", 220))
-        command_col_width = max(120, min(1000, command_col_width))
-        self.seq_table.setColumnWidth(1, command_col_width)
-        
-        # Load alerts
+        self.seq_table.setColumnWidth(
+            1, max(120, min(1000, int(
+                self.config.get("sequence_command_col_width", 220)
+            )))
+        )
         self._alerts = self.config.get("alerts", [])
-        
         if self.config.get("theme", "dark") == "light":
             self._apply_light_theme()
+        self._apply_usb_bridge_workspace_modes(show_error=False)
 
     def _collect_config(self):
-        self.config.set("port", self.port_combo.currentText())
+        self.config.set("port", self.port_combo.currentData() or "")
         self.config.set("baud", int(self.baud_combo.currentText()))
         self.config.set("databits", int(self.databits_combo.currentText()))
         self.config.set("parity", self.parity_combo.currentText())
@@ -531,15 +1092,24 @@ class SerialMonitorApp(QMainWindow):
         self.config.set("color_tx", self._color_tx)
         self.config.set("color_bg", self._color_bg)
         self.config.set("auto_send_interval", self.interval_spin.value())
-        
-        # Save sequence configuration
+        if self.active_bridge is not None:
+            all_modes = dict(self.config.get("usb_bridge_modes", {}))
+            all_modes[self.active_bridge.key] = {
+                channel: combo.currentText()
+                for channel, combo in self.usb_bridge_mode_combos.items()
+            }
+            self.config.set("usb_bridge_modes", all_modes)
+        if hasattr(self, "usb_bridge_uart_sessions"):
+            for session in self.usb_bridge_uart_sessions.values():
+                session._collect_config()
+            for session in self.usb_bridge_i2c_sessions.values():
+                session._collect_config()
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
         self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
-        if hasattr(self, "main_splitter"):
-            splitter_sizes = self.main_splitter.sizes()
-            if splitter_sizes:
-                self.config.set("sequence_panel_width", splitter_sizes[0])
+        sizes = self.main_splitter.sizes()
+        if sizes:
+            self.config.set("sequence_panel_width", sizes[0])
         self._save_sequence_commands()
 
     def _save_config(self):
@@ -554,14 +1124,1050 @@ class SerialMonitorApp(QMainWindow):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _refresh_ports(self):
-        current = self.port_combo.currentText()
-        ports = list_ports()
+        """List ordinary serial ports while reserving known USB bridges."""
+        current = self.port_combo.currentData()
         self.port_combo.clear()
-        self.port_combo.addItems(ports)
-        if current in ports:
-            self._set_combo(self.port_combo, current)
-        elif ports:
-            self.port_combo.setCurrentIndex(0)
+        # If PyFtdi/libusb is unavailable, do not hide usable FTDI VCP ports
+        # from the ordinary serial console.
+        reserve_detected_bridges = bool(self.usb_bridge_adapters)
+        for label, device in list_port_details(
+            include_usb_bridges=not reserve_detected_bridges
+        ):
+            self.port_combo.addItem(label, device)
+        index = self.port_combo.findData(current)
+        if index >= 0:
+            self.port_combo.setCurrentIndex(index)
+
+    def _usb_bridge_modes_changed(self):
+        if hasattr(self, "port_combo"):
+            self._refresh_ports()
+        if hasattr(self, "i2c_channel_combo"):
+            if self.i2c_worker and self.i2c_worker.is_alive():
+                self.i2c_worker.stop()
+            self._refresh_i2c_channels()
+        self._apply_usb_bridge_workspace_modes()
+
+    def _usb_bridge_adapter_changed(self):
+        if hasattr(self, "usb_bridge_channel_tabs"):
+            self._rebuild_usb_bridge_workspace()
+            self._refresh_ports()
+
+    def _refresh_usb_bridges(self):
+        current_key = self.active_bridge.key if self.active_bridge else ""
+        try:
+            bridges = discover_usb_bridges()
+            error = ""
+        except Exception as exc:
+            bridges = []
+            error = str(exc)
+        self.usb_bridge_adapters = bridges
+        self.usb_bridge_combo.blockSignals(True)
+        self.usb_bridge_combo.clear()
+        for bridge in bridges:
+            self.usb_bridge_combo.addItem(bridge.label, bridge)
+        if not bridges:
+            self.usb_bridge_combo.addItem(error or "No supported adapter detected", None)
+        selected = next(
+            (index for index, bridge in enumerate(bridges) if bridge.key == current_key),
+            0,
+        )
+        self.usb_bridge_combo.setCurrentIndex(selected)
+        self.usb_bridge_combo.blockSignals(False)
+        self._rebuild_usb_bridge_workspace()
+        self._refresh_ports()
+
+    def _refresh_i2c_channels(self):
+        current = self.i2c_channel_combo.currentData()
+        self.i2c_channel_combo.clear()
+        bridge = getattr(self, "active_bridge", None)
+        for interface in bridge.interfaces if bridge else ():
+            combo = self.usb_bridge_mode_combos.get(interface.name)
+            if combo and combo.currentText() == I2C:
+                self.i2c_channel_combo.addItem(
+                    f"Interface {interface.name}", interface.index
+                )
+        index = self.i2c_channel_combo.findData(current)
+        if index >= 0:
+            self.i2c_channel_combo.setCurrentIndex(index)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FTDI I2C scanner
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _refresh_i2c_devices(self):
+        current = self.i2c_device_combo.currentData()
+        self.i2c_device_combo.clear()
+        try:
+            bound = getattr(self, "bound_bridge", None)
+            devices = (
+                [(bound.label, bound.base_url)] if bound is not None
+                else list_i2c_bridge_devices()
+            )
+        except Exception as exc:
+            self.i2c_device_combo.addItem(f"USB detection error: {exc}", None)
+            return
+        for label, url in devices:
+            self.i2c_device_combo.addItem(label, url)
+        if not devices:
+            self.i2c_device_combo.addItem("No I²C-capable USB bridge detected", None)
+        else:
+            index = self.i2c_device_combo.findData(current)
+            if index >= 0:
+                self.i2c_device_combo.setCurrentIndex(index)
+
+    def _i2c_url(self):
+        base = self.i2c_device_combo.currentData()
+        return f"{base}/{self.i2c_channel_combo.currentData()}"
+
+    def _reset_i2c_matrix(self):
+        for address in range(0x80):
+            row, column = divmod(address, 16)
+            item = QTableWidgetItem("" if address < 0x03 or address > 0x77 else "--")
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if address < 0x03 or address > 0x77:
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+                item.setBackground(QColor("#303030"))
+            else:
+                item.setForeground(QColor("#888888"))
+            self.i2c_matrix.setItem(row, column, item)
+
+    def _clear_i2c_scanned_addresses(self):
+        if hasattr(self, "i2c_device_inspector"):
+            self.i2c_device_inspector.set_addresses([])
+        if hasattr(self, "i2c_display_address"):
+            current_display = self.i2c_display_address.currentText()
+            self.i2c_display_address.clear()
+            self.i2c_display_address.setCurrentText(current_display or "0x3C")
+        if hasattr(self, "i2c_sequence_address"):
+            current_sequence = self.i2c_sequence_address.currentText()
+            self.i2c_sequence_address.clear()
+            self.i2c_sequence_address.setCurrentText(current_sequence or "0x3C")
+
+    def _i2c_matrix_address_clicked(self, row, column):
+        address = row * 16 + column
+        item = self.i2c_matrix.item(row, column)
+        if item and item.text() == f"{address:02X}":
+            self.i2c_device_inspector.select_address(address)
+            self.i2c_tools_tabs.setCurrentIndex(1)
+
+    def _toggle_i2c_scan(self):
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_worker.stop()
+            self.i2c_scan_btn.setEnabled(False)
+            self.i2c_scan_btn.setText("Stopping…")
+            return
+        if not self.i2c_device_combo.currentData():
+            QMessageBox.warning(self, "I²C", "No I²C-capable USB bridge is available.")
+            return
+        if self.i2c_channel_combo.currentData() is None:
+            QMessageBox.warning(self, "I²C", "Assign channel A or B to I2C first.")
+            return
+        url = self._i2c_url()
+        frequency = int(self.i2c_frequency_combo.currentData())
+        self.i2c_device_inspector.pause_polling()
+        self.i2c_device_inspector.setEnabled(False)
+        self._reset_i2c_matrix()
+        self.i2c_summary.setText(f"Scanning {url} at {frequency / 1000:g} kHz…")
+        self.i2c_progress_bar.setValue(0)
+        self.i2c_scan_btn.setText("Stop scan")
+        self.i2c_worker = I2cScanWorker(
+            url, frequency,
+            lambda address: self._signals.i2c_found.emit(address),
+            lambda current, total: self._signals.i2c_progress.emit(current, total),
+            lambda found, stopped, actual: self._signals.i2c_done.emit(found, stopped, actual),
+            lambda error: self._signals.i2c_error.emit(error),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_device_found(self, address):
+        row, column = divmod(address, 16)
+        item = self.i2c_matrix.item(row, column)
+        item.setText(f"{address:02X}")
+        item.setForeground(QColor("#ffffff"))
+        item.setBackground(QColor("#2E8B57"))
+        item.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+
+    def _i2c_scan_progress(self, current, total):
+        self.i2c_progress_bar.setMaximum(total)
+        self.i2c_progress_bar.setValue(current)
+
+    def _i2c_scan_done(self, found, stopped, actual_frequency):
+        state = "Scan stopped" if stopped else "Scan complete"
+        addresses = ", ".join(f"0x{address:02X}" for address in found) or "none"
+        self.i2c_summary.setText(
+            f"{state}. Found {len(found)} device(s): {addresses}. "
+            f"Actual clock: {actual_frequency / 1000:g} kHz."
+        )
+        self.i2c_device_inspector.set_addresses(found)
+        self.i2c_display_address.clear()
+        self.i2c_display_address.addItems([f"0x{address:02X}" for address in found])
+        self.i2c_sequence_address.clear()
+        self.i2c_sequence_address.addItems([f"0x{address:02X}" for address in found])
+        display_default = "0x3C"
+        found_text = [f"0x{address:02X}" for address in found]
+        if display_default in found_text:
+            self.i2c_display_address.setCurrentText(display_default)
+        elif found_text:
+            self.i2c_display_address.setCurrentIndex(0)
+        else:
+            self.i2c_display_address.setCurrentText(display_default)
+        if display_default in found_text:
+            self.i2c_sequence_address.setCurrentText(display_default)
+        elif found_text:
+            self.i2c_sequence_address.setCurrentIndex(0)
+        else:
+            self.i2c_sequence_address.setCurrentText(display_default)
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_scan_btn.setText("Scan I²C bus")
+        self.i2c_device_inspector.setEnabled(True)
+
+    def _i2c_scan_error(self, error):
+        self.i2c_summary.setText(f"ERROR: {error}")
+        if hasattr(self, "i2c_device_inspector"):
+            self.i2c_device_inspector.handle_error(error)
+            self.i2c_device_inspector.setEnabled(True)
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_scan_btn.setText("Scan I²C bus")
+        if hasattr(self, "i2c_display_buttons"):
+            for button in self.i2c_display_buttons:
+                button.setEnabled(True)
+            self.i2c_display_status.setText(f"ERROR: {error}")
+        if hasattr(self, "i2c_trace_status"):
+            self.i2c_trace_status.setText(f"ERROR: {error}")
+        if hasattr(self, "i2c_run_sequence_btn"):
+            self.i2c_run_sequence_btn.setEnabled(True)
+            self.i2c_run_sequence_btn.setText("Run all")
+        QMessageBox.critical(self, "FTDI I²C error", error)
+
+    @staticmethod
+    def _parse_i2c_number(text, name):
+        try:
+            return int(text.strip(), 0)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be decimal or hexadecimal (0x...).") from exc
+
+    def _start_i2c_inspector_transaction(self, operation, request):
+        """Start one generic register transaction requested by the inspector."""
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_device_inspector.handle_operation_error(
+                "Wait for the current I²C operation to finish.", request
+            )
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            self.i2c_device_inspector.handle_operation_error(
+                "Select an I²C-capable adapter interface first.",
+                request,
+            )
+            return
+        self.i2c_scan_btn.setEnabled(False)
+        self.i2c_worker = I2cTransactionWorker(
+            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            operation, request["address"], request["register"],
+            request["register_width"], request["big_endian"],
+            request.get("payload", b""), request["length"],
+            lambda action, data: self._signals.i2c_transaction_done.emit(
+                action, data, request
+            ),
+            lambda error: self._signals.i2c_inspector_error.emit(error, request),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_transaction_done(self, operation, data, request):
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_device_inspector.handle_register_result(operation, data, request)
+
+    def _start_i2c_memory_operation(self, operation, request):
+        """Start a chunked memory read or a page-aware write with verification."""
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_device_inspector.handle_operation_error(
+                "Wait for the current I²C operation to finish.", request
+            )
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            self.i2c_device_inspector.handle_operation_error(
+                "Select an I²C-capable adapter interface first.",
+                request,
+            )
+            return
+        self.i2c_scan_btn.setEnabled(False)
+        self.i2c_worker = I2cMemoryWorker(
+            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            operation, request["address"], request["start"],
+            request["register_width"], request["big_endian"],
+            request["length"], request.get("payload", b""),
+            request["page_size"], request["write_delay_ms"],
+            lambda action, data: self._signals.i2c_memory_done.emit(action, data),
+            lambda error: self._signals.i2c_inspector_error.emit(error, request),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_memory_done(self, operation, data):
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_device_inspector.handle_memory_result(operation, data)
+
+    def _i2c_inspector_error(self, error, request):
+        """Report inspector errors inline, including errors during live polling."""
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_device_inspector.setEnabled(True)
+        self.i2c_device_inspector.handle_operation_error(error, request)
+
+    def _start_i2c_display_test(self, action):
+        if self.i2c_display_controller.currentText() != "SSD1306":
+            QMessageBox.warning(
+                self, "Display Test",
+                "Quick patterns require SSD1306. Use Sequence Builder for a "
+                "custom or unknown display."
+            )
+            return
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            QMessageBox.warning(self, "I²C busy", "Wait for the current I²C operation.")
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            QMessageBox.warning(self, "I²C", "Select a device and an I²C channel first.")
+            return
+        try:
+            address = self._parse_i2c_number(
+                self.i2c_display_address.currentText(), "Display address"
+            )
+            if not 0x03 <= address <= 0x77:
+                raise ValueError("The 7-bit display address must be from 0x03 to 0x77.")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid I²C value", str(exc))
+            return
+        width, height = self.i2c_display_resolution.currentData()
+        self.i2c_device_inspector.pause_polling()
+        if action == "initialize":
+            self._load_ssd1306_trace()
+        for button in self.i2c_display_buttons:
+            button.setEnabled(False)
+        self.i2c_scan_btn.setEnabled(False)
+        self.i2c_device_inspector.setEnabled(False)
+        self.i2c_display_status.setText(f"SSD1306 {action} in progress…")
+        self.i2c_worker = Ssd1306Worker(
+            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            address, width, height, action,
+            lambda completed: self._signals.i2c_display_done.emit(completed),
+            lambda error: self._signals.i2c_error.emit(error),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_canvas_size(self):
+        return self.i2c_display_resolution.currentData()
+
+    def _i2c_logical_canvas_size(self):
+        width, height = self._i2c_canvas_size()
+        if self.i2c_display_orientation.currentData() == "horizontal":
+            return width, height
+        return height, width
+
+    def _orient_i2c_qimage(self, image):
+        orientation = self.i2c_display_orientation.currentData()
+        if orientation == "clockwise":
+            return image.transformed(QTransform().rotate(90))
+        if orientation == "counter_clockwise":
+            return image.transformed(QTransform().rotate(-90))
+        return image
+
+    def _image_orientation_changed(self):
+        if self._i2c_preview_kind == "loaded" and self._i2c_loaded_image_path:
+            self._rebuild_i2c_loaded_image()
+        elif self._i2c_preview_kind == "example_image":
+            self._load_i2c_example_image()
+        elif self._i2c_preview_kind == "text":
+            self._preview_i2c_display_text()
+
+    def _set_i2c_canvas_preview(self, image, light_background=None, binary_source=False):
+        self._i2c_source_image = image.convertToFormat(QImage.Format.Format_ARGB32)
+        self._i2c_source_light_background = light_background
+        self._i2c_source_is_binary = binary_source
+        self._refresh_i2c_binary_preview()
+
+    def _refresh_i2c_binary_preview(self):
+        if self._i2c_source_image is None:
+            return
+        source = self._i2c_source_image
+        width, height = source.width(), source.height()
+        threshold = self.i2c_image_threshold.value()
+        pixels = []
+        bright_opaque_count = 0
+        opaque_count = 0
+        for y in range(height):
+            row = []
+            for x in range(width):
+                pixel = source.pixel(x, y)
+                alpha = (pixel >> 24) & 0xFF
+                red, green, blue = (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF
+                luminance = (red * 299 + green * 587 + blue * 114) // 1000
+                opaque = alpha >= 16
+                row.append((opaque, luminance))
+                opaque_count += int(opaque)
+                bright_opaque_count += int(opaque and luminance >= threshold)
+            pixels.append(row)
+        if self._i2c_source_light_background is None:
+            light_background = bright_opaque_count > (opaque_count // 2) if opaque_count else False
+        else:
+            light_background = self._i2c_source_light_background
+        use_light_background = self.i2c_image_auto_background.isChecked() and light_background
+        manual_invert = self.i2c_image_invert.isChecked()
+        use_dither = self.i2c_image_conversion.currentIndex() == 0
+        bayer = (
+            (0, 8, 2, 10), (12, 4, 14, 6),
+            (3, 11, 1, 9), (15, 7, 13, 5),
+        )
+        binary = QImage(width, height, QImage.Format.Format_RGB32)
+        binary.fill(QColor("black"))
+        for y, row in enumerate(pixels):
+            for x, (opaque, luminance) in enumerate(row):
+                if not opaque:
+                    lit = False
+                elif self._i2c_source_is_binary:
+                    lit = luminance >= 128
+                elif use_dither:
+                    ink = 255 - luminance if use_light_background else luminance
+                    if ink <= 8:
+                        lit = False
+                    elif ink >= 247:
+                        lit = True
+                    else:
+                        ink = max(0, min(255, ink + threshold - 128))
+                        lit = ink > (bayer[y % 4][x % 4] * 16 + 7)
+                elif use_light_background:
+                    lit = luminance < threshold
+                else:
+                    lit = luminance >= threshold
+                if manual_invert:
+                    lit = not lit
+                binary.setPixelColor(x, y, QColor("white" if lit else "black"))
+        self._i2c_canvas_image = binary
+        pixmap = QPixmap.fromImage(binary).scaled(
+            self.i2c_display_preview.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        self.i2c_display_preview.setPixmap(pixmap)
+
+    def _preview_i2c_display_text(self):
+        self._i2c_loaded_image_path = None
+        self._i2c_preview_kind = "text"
+        width, height = self._i2c_logical_canvas_size()
+        image = QImage(width, height, QImage.Format.Format_RGB32)
+        image.fill(QColor("black"))
+        painter = QPainter(image)
+        painter.setPen(QColor("white"))
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, False)
+        font = QFont("DejaVu Sans Mono", self.i2c_display_font_size.value())
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setStyleStrategy(QFont.StyleStrategy.NoAntialias)
+        painter.setFont(font)
+        painter.drawText(
+            image.rect(), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+            self.i2c_display_text.text(),
+        )
+        painter.end()
+        image = self._orient_i2c_qimage(image)
+        self._set_i2c_canvas_preview(image, light_background=False, binary_source=True)
+        self.i2c_display_status.setText("Text preview generated. Press Send preview to test it.")
+
+    def _load_i2c_example_text(self):
+        self.i2c_display_text.setText("Hello I2C!\nSSD1306")
+        self.i2c_display_font_size.setValue(12)
+        self._preview_i2c_display_text()
+        self.i2c_display_status.setText(
+            "Example text ready. Press Send preview to write its framebuffer."
+        )
+
+    def _load_i2c_example_image(self):
+        self._i2c_loaded_image_path = None
+        self._i2c_preview_kind = "example_image"
+        width, height = self._i2c_logical_canvas_size()
+        image = QImage(width, height, QImage.Format.Format_RGB32)
+        image.fill(QColor("black"))
+        painter = QPainter(image)
+        painter.setPen(QColor("white"))
+        painter.drawRect(0, 0, width - 1, height - 1)
+        radius = max(6, min(width, height) // 5)
+        center_x, center_y = width // 4, height // 2
+        painter.drawEllipse(center_x - radius, center_y - radius, radius * 2, radius * 2)
+        painter.drawLine(center_x - radius // 2, center_y, center_x, center_y + radius // 2)
+        painter.drawLine(center_x, center_y + radius // 2, center_x + radius, center_y - radius)
+        painter.setFont(QFont("Sans Serif", max(7, height // 7), QFont.Weight.Bold))
+        painter.drawText(
+            width // 2, 0, width // 2 - 2, height,
+            Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+            "I2C\nOK",
+        )
+        painter.end()
+        image = self._orient_i2c_qimage(image)
+        self._set_i2c_canvas_preview(image, light_background=False, binary_source=True)
+        self.i2c_display_status.setText(
+            "Example image ready. Press Send preview to write its framebuffer."
+        )
+
+    def _load_i2c_display_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load monochrome display image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp);;All files (*)"
+        )
+        if not path:
+            return
+        source = QImage(path)
+        if source.isNull():
+            QMessageBox.warning(self, "Display image", "Could not load that image.")
+            return
+        self._i2c_loaded_image_path = path
+        self._i2c_preview_kind = "loaded"
+        self._rebuild_i2c_loaded_image()
+        self.i2c_display_status.setText(f"Image loaded: {path}")
+
+    def _image_conversion_controls_changed(self):
+        if self._i2c_loaded_image_path:
+            self._rebuild_i2c_loaded_image()
+        else:
+            self._refresh_i2c_binary_preview()
+
+    def _rebuild_i2c_loaded_image(self):
+        path = self._i2c_loaded_image_path
+        if not path:
+            return
+        width, height = self._i2c_canvas_size()
+        scaling_text = self.i2c_image_scaling.currentText()
+        if scaling_text.startswith("Stretch"):
+            scaling = "stretch"
+        elif scaling_text.startswith("Fill"):
+            scaling = "crop"
+        else:
+            scaling = "fit"
+        try:
+            pixels, metadata = convert_image(
+                path, width, height, scaling=scaling,
+                dither=self.i2c_image_conversion.currentIndex() == 0,
+                brightness=self.i2c_image_threshold.value(),
+                auto_background=self.i2c_image_auto_background.isChecked(),
+                orientation=self.i2c_display_orientation.currentData(),
+            )
+        except Exception as exc:
+            self.i2c_display_status.setText(f"Image conversion error: {exc}")
+            return
+        canvas = QImage(width, height, QImage.Format.Format_RGB32)
+        canvas.fill(QColor("black"))
+        for index, lit in enumerate(pixels):
+            if lit:
+                canvas.setPixelColor(index % width, index // width, QColor("white"))
+        self._set_i2c_canvas_preview(
+            canvas, light_background=False, binary_source=True
+        )
+        mode = {
+            "stretch": "whole image stretched to 128×64",
+            "crop": "cropped to fill",
+            "fit": "whole image with original proportions",
+        }[scaling]
+        self.i2c_display_status.setText(
+            f"Converted with Lanczos + autocontrast + "
+            f"{'Floyd-Steinberg' if self.i2c_image_conversion.currentIndex() == 0 else 'threshold'} "
+            f"({mode}, source {metadata['source_size'][0]}×{metadata['source_size'][1]})."
+        )
+
+    def _i2c_canvas_framebuffer(self):
+        if self._i2c_canvas_image is None:
+            raise ValueError("Generate a text preview or load an image first.")
+        width, height = self._i2c_canvas_size()
+        if (self._i2c_canvas_image.width(), self._i2c_canvas_image.height()) != (width, height):
+            raise ValueError("Preview resolution changed; generate the preview again.")
+        data = bytearray(width * (height // 8))
+        for y in range(height):
+            for x in range(width):
+                pixel = self._i2c_canvas_image.pixel(x, y)
+                red, green, blue = (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF
+                lit = ((red * 299 + green * 587 + blue * 114) // 1000) >= 128
+                if lit:
+                    data[(y // 8) * width + x] |= 1 << (y % 8)
+        return bytes(data)
+
+    def _send_i2c_display_canvas(self):
+        if self.i2c_display_controller.currentText() != "SSD1306":
+            QMessageBox.warning(
+                self, "Display preview",
+                "Text and image framebuffers currently support SSD1306 only."
+            )
+            return
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            QMessageBox.warning(self, "I²C busy", "Wait for the current I²C operation.")
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            QMessageBox.warning(self, "I²C", "Select a device and an I²C channel first.")
+            return
+        try:
+            address = self._parse_i2c_number(
+                self.i2c_display_address.currentText(), "Display address"
+            )
+            framebuffer = self._i2c_canvas_framebuffer()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Display preview", str(exc))
+            return
+        width, height = self._i2c_canvas_size()
+        self.i2c_device_inspector.pause_polling()
+        self.i2c_device_inspector.setEnabled(False)
+        self.i2c_display_status.setText("Sending preview framebuffer…")
+        self.i2c_worker = Ssd1306Worker(
+            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            address, width, height, "custom",
+            lambda completed: self._signals.i2c_display_done.emit(completed),
+            lambda error: self._signals.i2c_error.emit(error),
+            framebuffer=framebuffer,
+        )
+        self.i2c_worker.start()
+
+    def _i2c_display_done(self, action):
+        labels = {
+            "initialize": "Display initialized", "clear": "Display cleared",
+            "all_on": "All-pixels pattern sent", "border": "Border pattern sent",
+            "grid": "Grid pattern sent", "bars": "Bars pattern sent",
+            "invert": "Display inverted", "normal": "Normal display mode restored",
+            "display_on": "Display turned on", "display_off": "Display turned off",
+            "trace_step": "Selected trace step sent",
+            "custom": "Preview framebuffer sent",
+        }
+        self.i2c_display_status.setText(f"{labels[action]} (ACK).")
+        if action == "trace_step":
+            self.i2c_trace_status.setText("Selected command sent successfully (ACK).")
+        self.i2c_worker = None
+        for button in self.i2c_display_buttons:
+            button.setEnabled(True)
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_device_inspector.setEnabled(True)
+
+    def _load_ssd1306_trace(self):
+        _width, height = self.i2c_display_resolution.currentData()
+        steps = ssd1306_init_steps(height)
+        self.i2c_trace_table.setRowCount(0)
+        read_only = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+        for index, (name, command, description) in enumerate(steps, start=1):
+            row = self.i2c_trace_table.rowCount()
+            self.i2c_trace_table.insertRow(row)
+            values = (
+                str(index), name, "Command",
+                " ".join(f"{value:02X}" for value in command), description,
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setFlags(read_only)
+                self.i2c_trace_table.setItem(row, column, item)
+        self.i2c_trace_status.setText(
+            f"Loaded {len(steps)} SSD1306 initialization steps for {height} rows. "
+            "Only the Bytes column is editable."
+        )
+
+    def _capture_i2c_profile(self):
+        rows = []
+        for row in range(self.i2c_trace_table.rowCount()):
+            rows.append([
+                self.i2c_trace_table.item(row, column).text()
+                if self.i2c_trace_table.item(row, column) else ""
+                for column in range(1, 5)
+            ])
+        return {
+            "format": "i2c-display-profile-v1",
+            "name": self.i2c_profile_tabs.tabText(self._i2c_active_profile)
+                    if self._i2c_active_profile >= 0 else "Display",
+            "controller": self.i2c_display_controller.currentText(),
+            "resolution": self.i2c_display_resolution.currentText(),
+            "address": self.i2c_sequence_address.currentText(),
+            "command_prefix": self.i2c_command_prefix.text(),
+            "data_prefix": self.i2c_data_prefix.text(),
+            "preview_text": self.i2c_display_text.text(),
+            "preview_font_size": self.i2c_display_font_size.value(),
+            "image_threshold": self.i2c_image_threshold.value(),
+            "invert_pixels": self.i2c_image_invert.isChecked(),
+            "auto_dark_background": self.i2c_image_auto_background.isChecked(),
+            "image_conversion": self.i2c_image_conversion.currentText(),
+            "image_scaling": self.i2c_image_scaling.currentText(),
+            "orientation": self.i2c_display_orientation.currentData(),
+            "steps": rows,
+        }
+
+    def _apply_i2c_profile(self, profile):
+        self._i2c_profile_switching = True
+        self.i2c_sequence_address.setCurrentText(profile.get("address", "0x3C"))
+        self.i2c_command_prefix.setText(profile.get("command_prefix", "00"))
+        self.i2c_data_prefix.setText(profile.get("data_prefix", "40"))
+        self.i2c_display_text.setText(profile.get("preview_text", "Hello I2C"))
+        self.i2c_display_font_size.setValue(int(profile.get("preview_font_size", 14)))
+        self.i2c_image_threshold.setValue(int(profile.get("image_threshold", 128)))
+        self.i2c_image_invert.setChecked(bool(profile.get("invert_pixels", False)))
+        self.i2c_image_auto_background.setChecked(
+            bool(profile.get("auto_dark_background", True))
+        )
+        self._set_combo(
+            self.i2c_image_conversion,
+            profile.get("image_conversion", "Floyd-Steinberg (best detail)")
+        )
+        self._set_combo(
+            self.i2c_image_scaling,
+            profile.get("image_scaling", "Stretch to 128×64 (whole image)")
+        )
+        orientation_index = self.i2c_display_orientation.findData(
+            profile.get("orientation", "horizontal")
+        )
+        if orientation_index >= 0:
+            self.i2c_display_orientation.setCurrentIndex(orientation_index)
+        self._set_combo(self.i2c_display_controller, profile.get("controller", "SSD1306"))
+        self._set_combo(self.i2c_display_resolution, profile.get("resolution", "128 × 64"))
+        self.i2c_trace_table.setRowCount(0)
+        for values in profile.get("steps", []):
+            row = self.i2c_trace_table.rowCount()
+            self.i2c_trace_table.insertRow(row)
+            self.i2c_trace_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            for column, value in enumerate(values, start=1):
+                self.i2c_trace_table.setItem(row, column, QTableWidgetItem(str(value)))
+        self._renumber_i2c_trace()
+        self._i2c_profile_switching = False
+
+    def _store_active_i2c_profile(self):
+        if 0 <= self._i2c_active_profile < len(self._i2c_profiles):
+            self._i2c_profiles[self._i2c_active_profile] = self._capture_i2c_profile()
+
+    def _new_i2c_profile(self, name=None, load_preset=False):
+        if isinstance(name, bool):
+            name = None
+        self._store_active_i2c_profile()
+        name = name or f"Display {len(self._i2c_profiles) + 1}"
+        profile = {
+            "format": "i2c-display-profile-v1", "name": name,
+            "controller": "SSD1306" if load_preset else "Custom / Unknown",
+            "resolution": "128 × 64",
+            "address": "0x3C", "command_prefix": "00",
+            "data_prefix": "40", "preview_text": "Hello I2C",
+            "preview_font_size": 14, "image_threshold": 128,
+            "invert_pixels": False, "auto_dark_background": True,
+            "image_conversion": "Floyd-Steinberg (best detail)",
+            "image_scaling": "Stretch to 128×64 (whole image)",
+            "orientation": "horizontal",
+            "steps": [],
+        }
+        self._i2c_profiles.append(profile)
+        self.i2c_profile_tabs.addTab(name)
+        index = len(self._i2c_profiles) - 1
+        self._i2c_active_profile = index
+        self.i2c_profile_tabs.setCurrentIndex(index)
+        self._apply_i2c_profile(profile)
+        if load_preset:
+            self._load_ssd1306_trace()
+            self._load_i2c_example_image()
+            self._store_active_i2c_profile()
+
+    def _switch_i2c_profile(self, index):
+        if self._i2c_profile_switching or index < 0 or index >= len(self._i2c_profiles):
+            return
+        self._store_active_i2c_profile()
+        self._i2c_active_profile = index
+        self._apply_i2c_profile(self._i2c_profiles[index])
+        self.i2c_trace_status.setText(f"Profile: {self.i2c_profile_tabs.tabText(index)}")
+
+    def _duplicate_i2c_profile(self):
+        self._store_active_i2c_profile()
+        if self._i2c_active_profile < 0:
+            return
+        source = json.loads(json.dumps(self._i2c_profiles[self._i2c_active_profile]))
+        source["name"] = f"{source['name']} copy"
+        self._i2c_profiles.append(source)
+        index = self.i2c_profile_tabs.addTab(source["name"])
+        self.i2c_profile_tabs.setCurrentIndex(index)
+
+    def _rename_i2c_profile(self):
+        index = self.i2c_profile_tabs.currentIndex()
+        if index < 0:
+            return
+        current = self.i2c_profile_tabs.tabText(index)
+        name, accepted = QInputDialog.getText(self, "Rename display profile", "Name:", text=current)
+        if accepted and name.strip():
+            self.i2c_profile_tabs.setTabText(index, name.strip())
+            self._i2c_profiles[index]["name"] = name.strip()
+
+    def _close_i2c_profile(self, index):
+        if len(self._i2c_profiles) <= 1:
+            QMessageBox.information(self, "Display profiles", "At least one profile must remain open.")
+            return
+        self._store_active_i2c_profile()
+        self._i2c_profiles.pop(index)
+        self.i2c_profile_tabs.removeTab(index)
+        self._i2c_active_profile = self.i2c_profile_tabs.currentIndex()
+        self._apply_i2c_profile(self._i2c_profiles[self._i2c_active_profile])
+
+    def _save_i2c_profile(self):
+        self._store_active_i2c_profile()
+        if self._i2c_active_profile < 0:
+            return
+        profile = self._i2c_profiles[self._i2c_active_profile]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save display profile", f"{profile['name']}.i2cdisplay.json",
+            "I2C display profile (*.i2cdisplay.json);;JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as output:
+                json.dump(profile, output, indent=2, ensure_ascii=False)
+                output.write("\n")
+            self.i2c_trace_status.setText(f"Profile saved: {path}")
+        except OSError as exc:
+            QMessageBox.critical(self, "Save profile error", str(exc))
+
+    def _open_i2c_profile(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open display profile", "",
+            "I2C display profile (*.i2cdisplay.json);;JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as source:
+                profile = json.load(source)
+            if profile.get("format") != "i2c-display-profile-v1":
+                raise ValueError("Unsupported display profile format.")
+            self._store_active_i2c_profile()
+            self._i2c_profiles.append(profile)
+            index = self.i2c_profile_tabs.addTab(profile.get("name", "Display"))
+            self.i2c_profile_tabs.setCurrentIndex(index)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            QMessageBox.critical(self, "Open profile error", str(exc))
+
+    def _trace_rows(self):
+        rows = []
+        for row in range(self.i2c_trace_table.rowCount()):
+            step_type = self.i2c_trace_table.item(row, 2).text().strip().title()
+            if step_type not in ("Command", "Data", "Raw", "Delay"):
+                raise ValueError(
+                    f"Step {row + 1} type must be Command, Data, Raw, or Delay."
+                )
+            value = self.i2c_trace_table.item(row, 3).text().strip()
+            if step_type == "Delay":
+                try:
+                    milliseconds = int(value, 0)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid delay in step {row + 1}.") from exc
+                if milliseconds < 0:
+                    raise ValueError(f"Delay in step {row + 1} cannot be negative.")
+                payload = b""
+            else:
+                try:
+                    payload = bytes.fromhex(value)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid HEX bytes in step {row + 1}.") from exc
+                if not payload:
+                    raise ValueError(f"Step {row + 1} has no bytes.")
+                milliseconds = 0
+            rows.append({
+                "step": row + 1,
+                "action": self.i2c_trace_table.item(row, 1).text(),
+                "type": step_type,
+                "bytes": list(payload),
+                "milliseconds": milliseconds,
+                "description": self.i2c_trace_table.item(row, 4).text(),
+            })
+        return rows
+
+    def _renumber_i2c_trace(self):
+        for row in range(self.i2c_trace_table.rowCount()):
+            item = QTableWidgetItem(str(row + 1))
+            item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            self.i2c_trace_table.setItem(row, 0, item)
+
+    def _add_i2c_trace_step(self):
+        row = self.i2c_trace_table.currentRow()
+        row = self.i2c_trace_table.rowCount() if row < 0 else row + 1
+        self.i2c_trace_table.insertRow(row)
+        for column, value in enumerate(("", "New step", "Command", "", "")):
+            self.i2c_trace_table.setItem(row, column, QTableWidgetItem(value))
+        self._renumber_i2c_trace()
+        self.i2c_trace_table.selectRow(row)
+
+    def _remove_i2c_trace_step(self):
+        row = self.i2c_trace_table.currentRow()
+        if row >= 0:
+            self.i2c_trace_table.removeRow(row)
+            self._renumber_i2c_trace()
+
+    def _move_i2c_trace_step(self, direction):
+        row = self.i2c_trace_table.currentRow()
+        target = row + direction
+        if row < 0 or target < 0 or target >= self.i2c_trace_table.rowCount():
+            return
+        values = [self.i2c_trace_table.takeItem(row, col) for col in range(1, 5)]
+        other = [self.i2c_trace_table.takeItem(target, col) for col in range(1, 5)]
+        for col, item in enumerate(other, start=1):
+            self.i2c_trace_table.setItem(row, col, item)
+        for col, item in enumerate(values, start=1):
+            self.i2c_trace_table.setItem(target, col, item)
+        self.i2c_trace_table.selectRow(target)
+
+    def _i2c_sequence_address_value(self):
+        address = self._parse_i2c_number(
+            self.i2c_sequence_address.currentText(), "Sequence address"
+        )
+        if not 0x03 <= address <= 0x77:
+            raise ValueError("The 7-bit sequence address must be from 0x03 to 0x77.")
+        return address
+
+    def _i2c_sequence_prefixes(self):
+        try:
+            command = bytes.fromhex(self.i2c_command_prefix.text().strip())
+            data = bytes.fromhex(self.i2c_data_prefix.text().strip())
+        except ValueError as exc:
+            raise ValueError("Command and data prefixes must contain HEX bytes.") from exc
+        return command, data
+
+    def _prepare_i2c_sequence_steps(self):
+        rows = self._trace_rows()
+        command_prefix, data_prefix = self._i2c_sequence_prefixes()
+        prepared = []
+        for row in rows:
+            step = dict(row)
+            raw = bytes(row["bytes"])
+            if row["type"] == "Command":
+                step["payload"] = command_prefix + raw
+            elif row["type"] == "Data":
+                step["payload"] = data_prefix + raw
+            elif row["type"] == "Raw":
+                step["payload"] = raw
+            prepared.append(step)
+        return prepared
+
+    def _run_i2c_trace_step(self):
+        row = self.i2c_trace_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Command Trace", "Select a trace row first.")
+            return
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            QMessageBox.warning(self, "I²C busy", "Wait for the current I²C operation.")
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            QMessageBox.warning(self, "I²C", "Select a device and an I²C channel first.")
+            return
+        try:
+            address = self._i2c_sequence_address_value()
+            step = self._prepare_i2c_sequence_steps()[row]
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid trace step", str(exc))
+            return
+        if step["type"] == "Delay":
+            QTimer.singleShot(
+                step["milliseconds"],
+                lambda: self.i2c_trace_status.setText(
+                    f"Delay step {row + 1} completed ({step['milliseconds']} ms)."
+                ),
+            )
+            self.i2c_trace_status.setText(f"Waiting {step['milliseconds']} ms…")
+            return
+        self.i2c_device_inspector.pause_polling()
+        self.i2c_device_inspector.setEnabled(False)
+        self.i2c_trace_status.setText(f"Running step {row + 1}…")
+        self.i2c_worker = I2cRawWriteWorker(
+            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            address, step["payload"],
+            lambda completed: self._signals.i2c_display_done.emit(completed),
+            lambda error: self._signals.i2c_error.emit(error),
+        )
+        self.i2c_worker.start()
+
+    def _toggle_i2c_sequence(self):
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            if isinstance(self.i2c_worker, I2cSequenceWorker):
+                self.i2c_worker.stop()
+                self.i2c_run_sequence_btn.setEnabled(False)
+                self.i2c_run_sequence_btn.setText("Stopping…")
+            else:
+                QMessageBox.warning(self, "I²C busy", "Wait for the current I²C operation.")
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            QMessageBox.warning(self, "I²C", "Select a device and an I²C channel first.")
+            return
+        try:
+            address = self._i2c_sequence_address_value()
+            steps = self._prepare_i2c_sequence_steps()
+            if not steps:
+                raise ValueError("Add at least one sequence step.")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid sequence", str(exc))
+            return
+        self.i2c_device_inspector.pause_polling()
+        self.i2c_device_inspector.setEnabled(False)
+        self.i2c_run_sequence_btn.setText("Stop sequence")
+        self.i2c_trace_status.setText(f"Running {len(steps)} steps…")
+        self.i2c_worker = I2cSequenceWorker(
+            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            address, steps,
+            lambda index: self._signals.i2c_sequence_step.emit(index),
+            lambda stopped: self._signals.i2c_sequence_done.emit(stopped),
+            lambda error: self._signals.i2c_error.emit(error),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_sequence_step_done(self, index):
+        self.i2c_trace_table.selectRow(index)
+        self.i2c_trace_status.setText(
+            f"Step {index + 1} completed (ACK or delay completed)."
+        )
+
+    def _i2c_sequence_finished(self, stopped):
+        self.i2c_worker = None
+        self.i2c_run_sequence_btn.setEnabled(True)
+        self.i2c_run_sequence_btn.setText("Run all")
+        self.i2c_device_inspector.setEnabled(True)
+        self.i2c_trace_status.setText(
+            "Sequence stopped by user." if stopped else "Sequence completed successfully."
+        )
+
+    def _export_i2c_trace(self, output_format):
+        if not self.i2c_trace_table.rowCount():
+            self._load_ssd1306_trace()
+        try:
+            rows = self._trace_rows()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Command Trace", str(exc))
+            return
+        suffix = "json" if output_format == "json" else "h"
+        file_filter = "JSON (*.json)" if output_format == "json" else "C header (*.h)"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export SSD1306 initialization", f"ssd1306_init.{suffix}", file_filter
+        )
+        if not path:
+            return
+        try:
+            if output_format == "json":
+                document = {
+                    "controller": self.i2c_display_controller.currentText(),
+                    "resolution": self.i2c_display_resolution.currentText(),
+                    "i2c_address_7bit": self.i2c_sequence_address.currentText(),
+                    "command_prefix_hex": self.i2c_command_prefix.text().strip(),
+                    "data_prefix_hex": self.i2c_data_prefix.text().strip(),
+                    "steps": rows,
+                }
+                content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+            else:
+                lines = ["/* Generated by Serial Monitor - SSD1306 initialization */"]
+                for entry in rows:
+                    if entry["type"] == "Delay":
+                        lines.append(
+                            f"/* Step {entry['step']}: delay {entry['milliseconds']} ms - "
+                            f"{entry['description']} */"
+                        )
+                        continue
+                    values = ", ".join(f"0x{value:02X}" for value in entry["bytes"])
+                    symbol = re.sub(r"[^a-z0-9]+", "_", entry["action"].lower()).strip("_")
+                    lines.append(f"static const uint8_t ssd1306_{symbol}[] = {{ {values} }}; "
+                                 f"/* {entry['description']} */")
+                content = "\n".join(lines) + "\n"
+            with open(path, "w", encoding="utf-8") as output:
+                output.write(content)
+            self.i2c_trace_status.setText(f"Trace exported to {path}")
+        except OSError as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
 
     # ──────────────────────────────────────────────────────────────────────────
     # Connection
@@ -574,9 +2180,21 @@ class SerialMonitorApp(QMainWindow):
             self._connect()
 
     def _connect(self):
-        port = self.port_combo.currentText()
+        port = self.port_combo.currentData()
         if not port:
             QMessageBox.warning(self, "No Port", "Please select a serial port.")
+            return
+        if os.name != "nt" and not os.access(port, os.R_OK | os.W_OK):
+            user = getpass.getuser()
+            QMessageBox.warning(
+                self,
+                "Serial port permission required",
+                f"Your Ubuntu user cannot access {port}.\n\n"
+                f"Run this command in a terminal:\n"
+                f"sudo usermod -aG dialout {user}\n\n"
+                "Then sign out of Ubuntu completely and sign back in. "
+                "This setup is only required once."
+            )
             return
         self.worker = SerialWorker(
             port=port,
@@ -1504,6 +3122,8 @@ class SerialMonitorApp(QMainWindow):
     
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts"""
+        if not hasattr(self, "send_edit"):
+            return
         # Ctrl+Enter: Send command
         QShortcut(QKeySequence("Ctrl+Return"), self, self._send_data)
         
@@ -1642,9 +3262,237 @@ class SerialMonitorApp(QMainWindow):
         if idx >= 0:
             combo.setCurrentIndex(idx)
 
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value):
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
     def closeEvent(self, event):
         self._collect_config()
+        if hasattr(self, "usb_bridge_uart_sessions"):
+            for session in self.usb_bridge_uart_sessions.values():
+                session.shutdown_session()
+            for session in self.usb_bridge_i2c_sessions.values():
+                session.shutdown_session()
         self.config.save()
         if self.worker:
             self.worker.stop()
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_worker.stop()
+        event.accept()
+
+
+class UartSessionPanel(SerialMonitorApp):
+    """Reusable full UART console bound to one physical bridge interface."""
+
+    def __init__(self, interface, bridge, config, channel_manager):
+        self.session_channel = interface.name
+        self.session_interface = interface.index
+        self.bound_bridge = bridge
+        self.channel_manager = channel_manager
+        self._channel_owner = f"UART session {self.session_channel}"
+        super().__init__(config)
+        self.setWindowTitle(
+            f"{bridge.vendor} {bridge.model} interface {self.session_channel} — UART"
+        )
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.addWidget(self._build_config_panel())
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        self.main_splitter = splitter
+        sequence = self._build_sequence_panel()
+        sequence.setMinimumWidth(300)
+        sequence.setMaximumWidth(520)
+        splitter.addWidget(sequence)
+        right = QWidget()
+        right_root = QVBoxLayout(right)
+        right_root.setContentsMargins(0, 0, 0, 0)
+        right_root.addWidget(self._build_monitor(), stretch=1)
+        right_root.addWidget(self._build_send_panel())
+        splitter.addWidget(right)
+        splitter.setStretchFactor(1, 1)
+        width = max(300, min(520, int(self.config.get("sequence_panel_width", 340))))
+        splitter.setSizes([width, 900])
+        root.addWidget(splitter, stretch=1)
+        self._build_status_bar()
+
+    def _load_config_into_ui(self):
+        self._refresh_ports()
+        self._set_combo_data(self.port_combo, self.config.get("port", ""))
+        self._set_combo(self.baud_combo, str(self.config.get("baud", 115200)))
+        self._set_combo(self.databits_combo, str(self.config.get("databits", 8)))
+        self._set_combo(self.parity_combo, self.config.get("parity", "None"))
+        self._set_combo(self.stopbits_combo, str(self.config.get("stopbits", "1")))
+        self._set_combo(self.flow_combo, self.config.get("flowcontrol", "None"))
+        self._set_combo(self.eol_tx_combo, self.config.get("eol_tx", "LF"))
+        self._set_combo(self.eol_rx_combo, self.config.get("eol_rx", "LF"))
+        self.chk_ascii.setChecked(self.config.get("show_ascii", True))
+        self.chk_hex.setChecked(self.config.get("show_hex", False))
+        self.chk_ts.setChecked(self.config.get("show_timestamp", True))
+        self._set_combo(self.send_fmt, self.config.get("send_format", "ASCII"))
+        self.interval_spin.setValue(float(self.config.get("auto_send_interval", 1.0)))
+        self._update_history_combo()
+        self.seq_interval_spin.setValue(float(self.config.get("sequence_interval", 1.0)))
+        self._set_combo(self.seq_mode_combo, self.config.get("sequence_mode", "Stop"))
+        self._load_sequence_commands()
+        self.seq_table.setColumnWidth(
+            1, max(120, min(1000, int(self.config.get("sequence_command_col_width", 220))))
+        )
+        self._alerts = self.config.get("alerts", [])
+        if self.config.get("theme", "dark") == "light":
+            self._apply_light_theme()
+
+    def _collect_config(self):
+        self.config.set("port", self.port_combo.currentData() or "")
+        self.config.set("baud", int(self.baud_combo.currentText()))
+        self.config.set("databits", int(self.databits_combo.currentText()))
+        self.config.set("parity", self.parity_combo.currentText())
+        self.config.set("stopbits", self.stopbits_combo.currentText())
+        self.config.set("flowcontrol", self.flow_combo.currentText())
+        self.config.set("eol_tx", self.eol_tx_combo.currentText())
+        self.config.set("eol_rx", self.eol_rx_combo.currentText())
+        self.config.set("show_ascii", self.chk_ascii.isChecked())
+        self.config.set("show_hex", self.chk_hex.isChecked())
+        self.config.set("show_timestamp", self.chk_ts.isChecked())
+        self.config.set("send_format", self.send_fmt.currentText())
+        self.config.set("color_rx", self._color_rx)
+        self.config.set("color_tx", self._color_tx)
+        self.config.set("color_bg", self._color_bg)
+        self.config.set("auto_send_interval", self.interval_spin.value())
+        self.config.set("sequence_interval", self.seq_interval_spin.value())
+        self.config.set("sequence_mode", self.seq_mode_combo.currentText())
+        self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
+        sizes = self.main_splitter.sizes()
+        if sizes:
+            self.config.set("sequence_panel_width", sizes[0])
+        self._save_sequence_commands()
+
+    def _refresh_ports(self):
+        current = self.port_combo.currentData()
+        ports = list_bridge_interface_ports(
+            self.session_channel,
+            bridge_pid=self.bound_bridge.pid,
+            bridge_serial=self.bound_bridge.serial or None,
+        )
+        self.port_combo.clear()
+        for label, device in ports:
+            self.port_combo.addItem(label, device)
+        index = self.port_combo.findData(current)
+        if index >= 0:
+            self.port_combo.setCurrentIndex(index)
+
+    def _connect(self):
+        try:
+            self.channel_manager.acquire(
+                self.session_channel, "UART", self._channel_owner
+            )
+        except InterfaceBusyError as exc:
+            QMessageBox.warning(self, "Adapter interface busy", str(exc))
+            return
+        super()._connect()
+        if self.worker is None:
+            self.channel_manager.release(self.session_channel, self._channel_owner)
+
+    def _disconnect(self):
+        super()._disconnect()
+        self.channel_manager.release(self.session_channel, self._channel_owner)
+
+    def _setup_shortcuts(self):
+        # The parent window owns global shortcuts; child sessions use buttons.
+        pass
+
+    def is_session_active(self):
+        return self.worker is not None
+
+    def shutdown_session(self):
+        if self._sequence_running:
+            self._stop_sequence()
+        self._collect_config()
+        self._disconnect()
+
+    def closeEvent(self, event):
+        self.shutdown_session()
+        event.accept()
+
+
+class I2cSessionPanel(SerialMonitorApp):
+    """Reusable complete I2C toolbox bound to one MPSSE interface."""
+
+    def __init__(self, interface, bridge, config, channel_manager):
+        self.session_channel = interface.name
+        self.session_interface = interface.index
+        self.bound_bridge = bridge
+        self.channel_manager = channel_manager
+        self._channel_owner = f"I2C session {self.session_channel}"
+        super().__init__(config)
+        self.setWindowTitle(
+            f"{bridge.vendor} {bridge.model} interface {self.session_channel} — I²C"
+        )
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self._build_i2c_tab())
+        self._build_status_bar()
+
+    def _refresh_i2c_channels(self):
+        self.i2c_channel_combo.clear()
+        self.i2c_channel_combo.addItem(
+            f"Interface {self.session_channel}", self.session_interface
+        )
+        self.i2c_channel_combo.setEnabled(False)
+
+    def _load_config_into_ui(self):
+        self._refresh_i2c_channels()
+        saved_url = self.config.get("i2c_device_url", "")
+        index = self.i2c_device_combo.findData(saved_url)
+        if index >= 0:
+            self.i2c_device_combo.setCurrentIndex(index)
+        index = self.i2c_frequency_combo.findData(
+            int(self.config.get("i2c_frequency", 100000))
+        )
+        if index >= 0:
+            self.i2c_frequency_combo.setCurrentIndex(index)
+        if self.config.get("theme", "dark") == "light":
+            self._apply_light_theme()
+
+    def _collect_config(self):
+        self.config.set("i2c_device_url", self.i2c_device_combo.currentData() or "")
+        self.config.set("i2c_channel", self.session_interface)
+        self.config.set("i2c_frequency", int(self.i2c_frequency_combo.currentData()))
+
+    def _setup_shortcuts(self):
+        pass
+
+    def activate_session(self):
+        try:
+            self.channel_manager.acquire(
+                self.session_channel, "I2C", self._channel_owner
+            )
+            return True
+        except InterfaceBusyError as exc:
+            self.i2c_summary.setText(f"ERROR: {exc}")
+            return False
+
+    def is_session_active(self):
+        return bool(self.i2c_worker and self.i2c_worker.is_alive())
+
+    def shutdown_session(self):
+        self._collect_config()
+        if hasattr(self, "i2c_device_inspector"):
+            self.i2c_device_inspector.pause_polling()
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_worker.stop()
+        self.channel_manager.release(self.session_channel, self._channel_owner)
+
+    def closeEvent(self, event):
+        self.shutdown_session()
         event.accept()

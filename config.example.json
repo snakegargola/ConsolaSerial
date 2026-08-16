@@ -25,6 +25,8 @@
   ],
   "sequence_interval": 2.0,
   "sequence_mode": "Restart",
+  "usb_bridge_modes": {},
+  "usb_bridge_sessions": {},
   "alerts": [
     {
       "pattern": "ERROR",

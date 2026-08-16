@@ -19,6 +19,19 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 
 ### Core
 - Conexión serial configurable: puerto, baud rate, data bits, parity, stop bits y flow control
+- Consola `USB Serial / General` para CH340, CP210x, PL2303, CDC/ACM, puertos
+  COM y adaptadores seriales no administrados por el workspace de protocolos
+- Detección por capacidades de FT232R, FT-X, FT232H, FT2232 y FT4232H/HA/HP
+- Escáner I²C mediante MPSSE, con selección automática de interfaces compatibles
+  y reloj de 100/400 kHz
+- Workspace `USB Bridge` con sesiones independientes según las interfaces reales
+  del adaptador conectado
+- Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
+  máscara, escala, offset, unidades y lectura periódica
+- Mapas de registros guardables en JSON, lectura individual/total, polling y
+  exportación de muestras a CSV
+- Visor de memorias I²C con matriz HEX/ASCII, archivos BIN, escritura por
+  páginas y verificación posterior
 - **Tooltips informativos** (NUEVO v2) - Aprende cada parámetro
 - Recepción y envío en tiempo real
 - Formatos de envío: `ASCII` y `HEX`
@@ -123,6 +136,10 @@ Compilar con instrucciones en: [`dist/windows-build-source/README_COMPILACION.md
 ### Para Desarrolladores
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** - Arquitectura y módulos
 - **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** - Guía de desarrollo
+- **[`docs/I2C.md`](docs/I2C.md)** - Uso y arquitectura de Scanner, Inspector,
+  memorias, pantallas y secuencias I²C
+- **[`docs/USB_BRIDGES.md`](docs/USB_BRIDGES.md)** - Modelos detectados,
+  capacidades, concurrencia y persistencia por interfaz
 - **[`FEATURES.md`](FEATURES.md)** - Características detalladas
 - **[`BUILD.md`](BUILD.md)** - Instrucciones de compilación
 
@@ -179,13 +196,92 @@ Serialpython/
 
 ## Troubleshooting
 
+### Adaptadores FTDI MPSSE e I²C en Ubuntu
+
+La pestaña `USB Bridge` usa PyFtdi y escanea las direcciones I²C de 7 bits
+`0x03` a `0x77`. Conecta `xDBUS0` a SCL y une `xDBUS1` con `xDBUS2` para
+SDA; ambas líneas requieren resistencias pull-up.
+
+`Device Inspector` trabaja con direcciones de dispositivo I²C de 7 bits. Su
+pestaña `Register / Sensor` lee y escribe registros de 8 o 16 bits, decodifica
+los bytes como decimal, HEX, octal, binario, ASCII y valor escalado, y puede
+hacer polling. `Memory Viewer` lee matrices HEX/ASCII y realiza escrituras por
+página con confirmación y verificación. La guía completa está en
+[`docs/I2C.md`](docs/I2C.md).
+
+`Display Test` ofrece diagnóstico rápido para pantallas SSD1306 de 128×64 y
+128×32. Permite inicializar, limpiar, encender/apagar, invertir y enviar patrones
+de píxeles, borde, cuadrícula y barras. La dirección `0x3C` se selecciona
+automáticamente cuando aparece en el escaneo. No se debe usar este preset con
+un controlador de pantalla diferente.
+
+`Sequence Builder` permite construir y probar la inicialización de una pantalla
+desconocida directamente desde su datasheet. Cada paso puede ser `Command`
+(usa el prefijo de comando), `Data` (usa el prefijo de datos), `Raw` (envía los
+bytes sin prefijo) o `Delay` (milisegundos). Los pasos pueden agregarse,
+eliminarse, reordenarse, ejecutarse individualmente o como una secuencia
+completa. SSD1306 se incluye como preset editable y la secuencia probada puede
+exportarse como JSON o arreglos C.
+
+Los perfiles de pantalla se administran como pestañas: pueden crearse,
+duplicarse, renombrarse, cerrarse y guardarse como archivos
+`.i2cdisplay.json`. El perfil `SSD1306 Example` conserva la configuración
+funcional de ejemplo; los perfiles nuevos comienzan como `Custom / Unknown`.
+
+Para SSD1306, `Display Test` también genera texto con tamaño de fuente
+configurable o convierte imágenes PNG/JPG/BMP a un framebuffer monocromático.
+La vista previa permite ajustar el umbral e invertir píxeles antes de enviarlos.
+Estas funciones gráficas se deshabilitan conceptualmente para controladores
+desconocidos porque cada familia organiza su memoria de forma diferente.
+El perfil `SSD1306 Example` abre con una imagen de demostración y ofrece los
+botones `Example text` y `Example image`; ambos generan un framebuffer listo
+para previsualizar y enviar sin necesitar archivos externos.
+La conversión de imágenes muestra el resultado binario exacto y activa por
+defecto `Auto dark background`: si la mayoría de la imagen es clara, interpreta
+el fondo blanco como píxeles apagados para evitar una pantalla completamente
+encendida. La detección automática puede desactivarse y combinarse con
+`Invert pixels` para casos especiales.
+El modo `Floyd-Steinberg (best detail)` usa Pillow para aplicar escala de
+grises, detección de fondo, recorte de contenido, autocontraste, enfoque,
+redimensionado Lanczos y conversión Floyd–Steinberg a 1 bit. `Threshold
+(sharp)` produce contornos sólidos. `Stretch to 128×64` muestra la imagen
+completa usando toda la pantalla, aunque cambia su proporción; `Fit whole
+image` conserva la proporción con espacios laterales; `Fill / crop` conserva
+la proporción y llena la pantalla recortando parte de la imagen. El texto se
+renderiza con fuente monoespaciada sin antialias.
+La orientación puede configurarse como horizontal `128×64`, vertical en sentido
+horario o vertical en sentido antihorario. Los modos verticales renderizan un
+lienzo lógico de `64×128` y lo rotan al framebuffer físico `128×64`, por lo que
+están pensados para una pantalla montada físicamente en vertical.
+
+Si aparece `Access denied`, agrega una regla udev para el VID/PID FTDI
+`0403:6011` y vuelve a conectar el dispositivo:
+
+```text
+SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6011", GROUP="plugdev", MODE="0664"
+```
+
+El canal A corresponde a la interfaz 1, B a la 2, etc. La aplicación detecta
+los adaptadores compatibles y construye internamente la dirección USB; el
+usuario no necesita conocer ni escribir una URL de PyFtdi.
+
+En Windows, PyFtdi necesita un backend libusb. Para dispositivos FTDI de
+varios canales se debe instalar el controlador libusb en el dispositivo
+compuesto padre; esto reemplaza el controlador VCP de FTDI para ese dispositivo.
+
 ### Linux - Permisos de Puerto Serial
 
+En Ubuntu los puertos `/dev/ttyUSB*` normalmente pertenecen al grupo
+`dialout`. Cada usuario que vaya a utilizar UART debe ejecutar una sola vez:
+
 ```bash
-# Agregar usuario a grupo dialout
 sudo usermod -a -G dialout $USER
-newgrp dialout
 ```
+
+Después debe cerrar completamente su sesión de Ubuntu y volver a entrar. Se
+puede verificar con `groups`: la lista debe incluir `dialout`. La aplicación
+marca los puertos sin acceso con `no permission` y muestra estas instrucciones
+antes de intentar conectarse.
 
 Ver instrucciones completas: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
 
