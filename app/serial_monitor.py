@@ -40,6 +40,7 @@ from .i2c_device_inspector import I2cDeviceInspector
 from .i2c_transaction_lab import I2cTransactionLab
 from .i2c_bus import I2cBusSettings
 from .serial_payload import encode_serial_payload, format_payload_preview
+from .uart_tools_widget import UartToolsPanel
 from .bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
@@ -81,6 +82,7 @@ class HexByteValidator(QValidator):
 # Worker signals bridge (PyQt signals must live in QObject)
 class _Signals(QObject):
     data_received = pyqtSignal(bytes)
+    raw_data_received = pyqtSignal(bytes)
     error_occurred = pyqtSignal(str)
     i2c_found = pyqtSignal(int)
     i2c_progress = pyqtSignal(int, int)
@@ -117,6 +119,7 @@ class SerialMonitorApp(QMainWindow):
         self.log = LogManager()
         self._signals = _Signals()
         self._signals.data_received.connect(self._display_rx)
+        self._signals.raw_data_received.connect(self._process_uart_loopback_rx)
         self._signals.error_occurred.connect(self._handle_error)
         self._signals.i2c_found.connect(self._i2c_device_found)
         self._signals.i2c_progress.connect(self._i2c_scan_progress)
@@ -197,6 +200,7 @@ class SerialMonitorApp(QMainWindow):
         serial_root.setSpacing(4)
         serial_root.setContentsMargins(0, 0, 0, 0)
         serial_root.addWidget(self._build_config_panel())
+        serial_root.addWidget(self._build_uart_tools_panel())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(10)
@@ -904,6 +908,30 @@ class SerialMonitorApp(QMainWindow):
         return box
 
     # ── Sequence panel ────────────────────────────────────────────────────────
+    def _build_uart_tools_panel(self):
+        self.uart_tools = UartToolsPanel(
+            can_start_loopback=self._can_start_uart_loopback,
+            status_callback=lambda message: self.statusBar().showMessage(
+                message, 6000
+            ),
+            parent=self,
+        )
+        self.flow_combo.currentTextChanged.connect(
+            self.uart_tools.set_flow_control
+        )
+        return self.uart_tools
+
+    def _can_start_uart_loopback(self):
+        if self._auto_timer.isActive():
+            return False, "Stop Auto-send before running loopback."
+        if self._sequence_running:
+            return False, "Stop Command Sequence before running loopback."
+        return True, ""
+
+    def _process_uart_loopback_rx(self, data):
+        if hasattr(self, "uart_tools"):
+            self.uart_tools.feed_raw_data(data)
+
     def _build_sequence_panel(self):
         box = QGroupBox("Command Sequence")
         vbox = QVBoxLayout(box)
@@ -1126,6 +1154,7 @@ class SerialMonitorApp(QMainWindow):
         self.chk_ascii.setChecked(self.config.get("show_ascii", True))
         self.chk_hex.setChecked(self.config.get("show_hex", False))
         self.chk_ts.setChecked(self.config.get("show_timestamp", True))
+        self.uart_tools.load_config(self.config)
         self._set_combo(self.send_fmt, self.config.get("send_format", "ASCII"))
         self.interval_spin.setValue(float(self.config.get("auto_send_interval", 1.0)))
         self._update_history_combo()
@@ -1159,6 +1188,7 @@ class SerialMonitorApp(QMainWindow):
         self.config.set("color_tx", self._color_tx)
         self.config.set("color_bg", self._color_bg)
         self.config.set("auto_send_interval", self.interval_spin.value())
+        self.uart_tools.collect_config(self.config)
         if self.active_bridge is not None:
             all_modes = dict(self.config.get("usb_bridge_modes", {}))
             all_modes[self.active_bridge.key] = {
@@ -2511,6 +2541,10 @@ class SerialMonitorApp(QMainWindow):
             )
             return
         self._connection_established = False
+        initial_rts, initial_dtr = (
+            self.uart_tools.output_states
+            if hasattr(self, "uart_tools") else (True, True)
+        )
         self.worker = SerialWorker(
             port=port,
             baud=int(self.baud_combo.currentText()),
@@ -2521,6 +2555,9 @@ class SerialMonitorApp(QMainWindow):
             eol_rx=self.eol_rx_combo.currentText(),
             on_data=lambda d: self._signals.data_received.emit(d),
             on_error=lambda e: self._signals.error_occurred.emit(e),
+            on_raw_data=lambda d: self._signals.raw_data_received.emit(d),
+            initial_rts=initial_rts,
+            initial_dtr=initial_dtr,
         )
         self.worker.start()
         QTimer.singleShot(300, self._check_connected)
@@ -2528,6 +2565,10 @@ class SerialMonitorApp(QMainWindow):
     def _check_connected(self):
         if self.worker and self.worker.is_connected:
             self._connection_established = True
+            if hasattr(self, "uart_tools"):
+                self.uart_tools.set_connection(
+                    self.worker, self.flow_combo.currentText()
+                )
             self.connect_btn.setText("Disconnect")
             self.connect_btn.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
             self.led_lbl.setStyleSheet("color:#00FF7F; font-size:18px;")
@@ -2537,6 +2578,8 @@ class SerialMonitorApp(QMainWindow):
 
     def _disconnect(self):
         self._connection_established = False
+        if hasattr(self, "uart_tools"):
+            self.uart_tools.set_connection(None, self.flow_combo.currentText())
         if self.worker:
             self.worker.stop()
             self.worker.join(timeout=2)
@@ -3587,6 +3630,8 @@ class SerialMonitorApp(QMainWindow):
             self._closing = True
             self._bridge_monitor_timer.stop()
         self._collect_config()
+        if hasattr(self, "uart_tools"):
+            self.uart_tools.shutdown()
         if hasattr(self, "usb_bridge_uart_sessions"):
             for session in self.usb_bridge_uart_sessions.values():
                 session.shutdown_session()
@@ -3620,6 +3665,7 @@ class UartSessionPanel(SerialMonitorApp):
         root = QVBoxLayout(central)
         root.setContentsMargins(4, 4, 4, 4)
         root.addWidget(self._build_config_panel())
+        root.addWidget(self._build_uart_tools_panel())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         self.main_splitter = splitter
@@ -3652,6 +3698,7 @@ class UartSessionPanel(SerialMonitorApp):
         self.chk_ascii.setChecked(self.config.get("show_ascii", True))
         self.chk_hex.setChecked(self.config.get("show_hex", False))
         self.chk_ts.setChecked(self.config.get("show_timestamp", True))
+        self.uart_tools.load_config(self.config)
         self._set_combo(self.send_fmt, self.config.get("send_format", "ASCII"))
         self.interval_spin.setValue(float(self.config.get("auto_send_interval", 1.0)))
         self._update_history_combo()
@@ -3682,6 +3729,7 @@ class UartSessionPanel(SerialMonitorApp):
         self.config.set("color_tx", self._color_tx)
         self.config.set("color_bg", self._color_bg)
         self.config.set("auto_send_interval", self.interval_spin.value())
+        self.uart_tools.collect_config(self.config)
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
         self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))

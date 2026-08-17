@@ -21,6 +21,10 @@
 - La detección de puentes USB ahora monitorea conexiones en segundo plano,
   invalida la caché de PyFtdi y reconstruye la interfaz al cambiar de adaptador
   sin congelar la ventana.
+- Agregado panel UART reutilizable con RTS, DTR, BREAK e indicadores de
+  CTS/DSR/DCD/RI para General y cada interfaz del USB Bridge.
+- Agregada prueba TX→RX loopback con tramas binarias deterministas, CRC-32,
+  timeouts, bytes inesperados y recepción independiente de EOL.
 
 ## v2.0.1 (2026-03-01) - Corrección HEX y release actualizado
 

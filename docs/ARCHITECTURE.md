@@ -125,7 +125,20 @@ SerialPython/
 Consulta [`I2C.md`](I2C.md) para el flujo de usuario y las garantías de escritura
 en memorias.
 
-### 7. Sesiones USB Bridge concurrentes
+### 7. Herramientas UART
+
+- `serial_worker.py` mantiene el acceso serial en background, entrega una ruta
+  RX cruda y controla RTS, DTR, BREAK y las entradas de módem.
+- `uart_loopback.py` genera tramas deterministas y verifica ecos fragmentados
+  sin depender de Qt, EOL ni hardware.
+- `uart_tools_widget.py` presenta las señales y coordina el loopback sin mezclar
+  esa máquina de estados con la ventana principal.
+- `serial_monitor.py` reutiliza el panel tanto en General como en cada sesión
+  UART del puente.
+
+Consulta [`UART.md`](UART.md) para el uso y las limitaciones del driver.
+
+### 8. Sesiones USB Bridge concurrentes
 
 La ventana principal crea un workspace con tantas sesiones como interfaces
 declare el adaptador detectado. `usb_bridge.py` separa la identificación de

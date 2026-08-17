@@ -43,10 +43,17 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 - Vista previa en HEX de los bytes exactos que se enviarán, incluyendo EOL TX
 - Entrada HEX protegida: solo acepta dígitos `0-9`, `A-F` y espacios, y bloquea
   el envío cuando falta completar un byte
+- Control manual de `RTS`, `DTR` y `BREAK`, con indicadores en vivo de
+  `CTS`, `DSR`, `DCD` y `RI`
+- Prueba UART TX→RX loopback con tramas binarias, timeout, conteo de errores y
+  validación independiente de la configuración EOL
 - Soporte de fin de línea TX/RX: `None`, `LF`, `CR`, `CR+LF`
 - Monitor con timestamp, vista ASCII/HEX
 - Historial de comandos
 - Personalización de colores (RX/TX/Fondo) y tema claro/oscuro
+
+Consulta [`docs/UART.md`](docs/UART.md) para el cableado de loopback, seguridad
+eléctrica y significado de las señales de control.
 
 ### Secuencias de Comandos
 - **Lista ordenada de comandos** con reordenamiento ( ↑↓ )
