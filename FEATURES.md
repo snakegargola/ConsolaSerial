@@ -30,6 +30,18 @@
 
 **Actualización**: Cada segundo automáticamente
 
+## 🔌 Diagnóstico UART de hardware
+
+- Control manual de salidas `RTS` y `DTR`.
+- BREAK no bloqueante de 250 ms.
+- Indicadores en vivo para entradas `CTS`, `DSR`, `DCD` y `RI`.
+- Loopback TX→RX con tramas binarias exactas, timeout por trama, conteo de
+  bytes inesperados y resultado PASS/FAIL.
+- Funciona en la consola General y de forma independiente en cada canal UART.
+
+El procedimiento de cableado y las precauciones de nivel eléctrico están en
+[`docs/UART.md`](docs/UART.md).
+
 ---
 
 ## 🔔 3. Alertas/Notificaciones - INTERFAZ AMIGABLE

@@ -88,7 +88,8 @@ class SerialWorker(threading.Thread):
     """Background thread that reads from a serial port and fires callbacks."""
 
     def __init__(self, port, baud, databits, parity, stopbits, flowcontrol, eol_rx,
-                 on_data, on_error):
+                 on_data, on_error, on_raw_data=None,
+                 initial_rts=True, initial_dtr=True):
         super().__init__(daemon=True)
         self._port = port
         self._baud = baud
@@ -97,11 +98,15 @@ class SerialWorker(threading.Thread):
         self._stopbits = stopbits
         self._flowcontrol = flowcontrol
         self._eol_rx = eol_rx
+        self._initial_rts = bool(initial_rts)
+        self._initial_dtr = bool(initial_dtr)
         self.on_data = on_data    # callback(bytes)
         self.on_error = on_error  # callback(str)
+        self.on_raw_data = on_raw_data  # callback(bytes), before EOL framing
         self._stop_event = threading.Event()
         self._serial = None
         self._tx_lock = threading.Lock()
+        self._control_lock = threading.Lock()
         self.rx_bytes = 0
         self.tx_bytes = 0
 
@@ -120,20 +125,32 @@ class SerialWorker(threading.Thread):
     }
 
     def run(self):
+        connection = None
         try:
             rtscts = self._flowcontrol == "RTS/CTS"
             xonxoff = self._flowcontrol == "XON/XOFF"
-            self._serial = serial.Serial(
-                port=self._port,
-                baudrate=self._baud,
-                bytesize=int(self._databits),
-                parity=self._PARITY_MAP.get(self._parity, serial.PARITY_NONE),
-                stopbits=self._STOPBITS_MAP.get(str(self._stopbits), serial.STOPBITS_ONE),
-                rtscts=rtscts,
-                xonxoff=xonxoff,
-                timeout=0.1,
+            # Configure output states before opening to avoid a needless
+            # RTS/DTR pulse on boards that use these lines for reset/boot.
+            connection = serial.Serial()
+            connection.port = self._port
+            connection.baudrate = self._baud
+            connection.bytesize = int(self._databits)
+            connection.parity = self._PARITY_MAP.get(
+                self._parity, serial.PARITY_NONE
             )
-        except serial.SerialException as e:
+            connection.stopbits = self._STOPBITS_MAP.get(
+                str(self._stopbits), serial.STOPBITS_ONE
+            )
+            connection.rtscts = rtscts
+            connection.xonxoff = xonxoff
+            connection.timeout = 0.1
+            connection.rts = self._initial_rts
+            connection.dtr = self._initial_dtr
+            connection.open()
+            self._serial = connection
+        except (OSError, ValueError, serial.SerialException) as e:
+            if connection is not None and connection.is_open:
+                connection.close()
             self.on_error(str(e))
             return
 
@@ -143,7 +160,7 @@ class SerialWorker(threading.Thread):
         while not self._stop_event.is_set():
             try:
                 chunk = self._serial.read(256)
-            except serial.SerialException as e:
+            except (OSError, serial.SerialException) as e:
                 self.on_error(str(e))
                 break
 
@@ -151,6 +168,8 @@ class SerialWorker(threading.Thread):
                 continue
 
             self.rx_bytes += len(chunk)
+            if self.on_raw_data:
+                self.on_raw_data(chunk)
 
             if eol:
                 buffer += chunk
@@ -179,9 +198,53 @@ class SerialWorker(threading.Thread):
                     self._serial.write(data)
                     self.tx_bytes += len(data)
                     return True
-                except serial.SerialException as e:
+                except (OSError, serial.SerialException) as e:
                     self.on_error(str(e))
         return False
+
+    def set_control_line(self, line: str, asserted: bool):
+        """Set RTS or DTR safely from the GUI thread."""
+        attribute = {"RTS": "rts", "DTR": "dtr"}.get(str(line).upper())
+        if attribute is None:
+            return False, f"Unsupported UART control line: {line}"
+        with self._control_lock:
+            connection = self._serial
+            if connection is None or not connection.is_open:
+                return False, "Serial port is not connected."
+            try:
+                setattr(connection, attribute, bool(asserted))
+            except (OSError, ValueError, serial.SerialException) as exc:
+                return False, str(exc)
+        return True, ""
+
+    def set_break(self, asserted: bool):
+        """Assert or release TX BREAK without sleeping in the GUI thread."""
+        with self._control_lock:
+            connection = self._serial
+            if connection is None or not connection.is_open:
+                return False, "Serial port is not connected."
+            try:
+                connection.break_condition = bool(asserted)
+            except (OSError, ValueError, serial.SerialException) as exc:
+                return False, str(exc)
+        return True, ""
+
+    def modem_status(self):
+        """Return input control-line states, or an error if unavailable."""
+        with self._control_lock:
+            connection = self._serial
+            if connection is None or not connection.is_open:
+                return None, "Serial port is not connected."
+            try:
+                status = {
+                    "CTS": bool(connection.cts),
+                    "DSR": bool(connection.dsr),
+                    "DCD": bool(connection.cd),
+                    "RI": bool(connection.ri),
+                }
+            except (OSError, ValueError, serial.SerialException) as exc:
+                return None, str(exc)
+        return status, ""
 
     def stop(self):
         self._stop_event.set()
