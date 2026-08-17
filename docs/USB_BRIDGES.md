@@ -31,7 +31,8 @@ no anuncia I²C.
 
 ## Uso
 
-1. Conecta el adaptador y pulsa `Refresh adapters`.
+1. Conecta el adaptador. La lista se actualiza automáticamente; `Refresh
+   adapters` permite solicitar una comprobación inmediata.
 2. Revisa la línea `Detected`, que enumera capacidades por interfaz.
 3. Elige `UART` o `I2C` en cada interfaz habilitada.
 4. Trabaja en las pestañas `Interface A`, `B`, etc. Las interfaces distintas
@@ -39,7 +40,16 @@ no anuncia I²C.
 
 No se permite cambiar de modo mientras la interfaz esté en uso. Los puertos VCP
 de adaptadores reconocidos se retiran de `USB Serial / General` para impedir una
-doble apertura accidental.
+doble apertura accidental. Cuando se detecta al menos un puente compatible, la
+aplicación muestra solamente `USB Bridge`; si no hay ninguno, muestra solamente
+`USB Serial / General` para CH340, CP210x, PL2303, CDC/ACM y otros UART. El botón
+`Refresh adapters` vuelve a evaluar esta selección.
+
+La detección se ejecuta en segundo plano cada tres segundos para que una consulta
+USB lenta no congele la ventana. La caché de enumeración de PyFtdi se invalida en
+cada consulta, por lo que al sustituir un FT232R por un FT4232H se eliminan las
+sesiones anteriores y se crean las cuatro interfaces del nuevo adaptador. Una
+falla transitoria de libusb se informa sin destruir sesiones que sigan activas.
 
 ## Persistencia y extensibilidad
 

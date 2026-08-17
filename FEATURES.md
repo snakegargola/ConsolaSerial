@@ -9,7 +9,8 @@
 - Resaltado automático de todas las coincidencias
 - Navegación con botones ◀ y ▶ (o usar el texto resaltado)
 - Contador de coincidencias
-- Case-insensitive
+- No distingue mayúsculas de minúsculas
+- Busca literalmente lo que escribe el usuario; no requiere Regex
 
 **Uso**:
 1. Escribe en el campo "🔍 Search"
@@ -18,30 +19,7 @@
 
 ---
 
-## 📌 2. Filtros de Visualización
-
-**Ubicación**: Barra de filtros debajo de la búsqueda
-
-**Características**:
-- Filtra mensajes por texto o patrón
-- Soporte para expresiones regulares (activa checkbox "Regex")
-- Los mensajes filtrados se ocultan temporalmente (no se eliminan)
-- Al limpiar el filtro, todos los mensajes reaparecen
-
-**Uso**:
-```
-Normal: escribir "ERROR" muestra solo líneas con "ERROR"
-Regex: escribir "^TX.*error" muestra líneas que empiezan con TX y contienen error
-```
-
-**Ejemplos útiles**:
-- `ERROR|WARNING` - Muestra errores y advertencias
-- `^RX` - Solo mensajes recibidos
-- `\d{3,}` - Líneas con números de 3 o más dígitos
-
----
-
-## 📊 3. Estadísticas de Transmisión
+## 📊 2. Estadísticas de Transmisión
 
 **Ubicación**: Toolbar superior del monitor
 
@@ -54,7 +32,7 @@ Regex: escribir "^TX.*error" muestra líneas que empiezan con TX y contienen err
 
 ---
 
-## 🔔 4. Alertas/Notificaciones - INTERFAZ AMIGABLE
+## 🔔 3. Alertas/Notificaciones - INTERFAZ AMIGABLE
 
 **Ubicación**: Botón "Manage Alerts" en el monitor
 
@@ -82,7 +60,7 @@ Regex: escribir "^TX.*error" muestra líneas que empiezan con TX y contienen err
 
 ---
 
-## 🔁 5. Variables en Comandos
+## 🔁 4. Variables en Comandos
 
 **Ubicación**: Panel de secuencia de comandos
 
@@ -107,7 +85,7 @@ Enviado como:     LOG_5_347.txt
 
 ---
 
-## ▶️ 6. Enviar Comando Específico - NUEVA FUNCIONALIDAD
+## ▶️ 5. Enviar Comando Específico - NUEVA FUNCIONALIDAD
 
 **Ubicación**: Cada fila de la tabla de secuencias
 
@@ -129,7 +107,7 @@ Enviado como:     LOG_5_347.txt
 
 ---
 
-## ⌨️ 7. Atajos de Teclado
+## ⌨️ 6. Atajos de Teclado
 
 | Atajo | Acción |
 |-------|--------|
@@ -160,7 +138,7 @@ Al presionar F1-F5, el comando se carga en el campo de envío y se transmite aut
 
 ---
 
-## 💾 8. Exportar/Importar Secuencias
+## 💾 7. Exportar/Importar Secuencias
 
 **Ubicación**: Panel de secuencia de comandos
 
@@ -253,7 +231,7 @@ Cada vez que ejecutes, los comandos tendrán valores únicos.
 
 ## 📝 Notas
 
-- **Buffer de log completo**: Los filtros no eliminan mensajes, solo los ocultan
+- **Búsqueda simple**: Resalta texto literal sin ocultar líneas del monitor
 - **Estadísticas**: Se reinician al desconectar
 - **Contador de secuencia**: Se reinicia al detener la secuencia
 - **Botón ▶**: Puedes usarlo sin estar en modo secuencia (aunque no esté corriendo)

@@ -13,10 +13,22 @@ class I2cRegisterMapTests(unittest.TestCase):
             registers=(RegisterDefinition(
                 name="Temperature", address=0x00, length=2, access="R",
                 signed=True, bit_width=12, right_shift=4,
-                scale=0.0625, unit="°C",
+                scale=0.0625, unit="°C", formula="x * 1.8 + 32",
+                bit_field="3:2", enum_map="0=Off,1=On",
             ),),
         )
         self.assertEqual(I2cDeviceProfile.from_dict(profile.to_dict()), profile)
+        self.assertEqual(profile.to_dict()["version"], 2)
+
+    def test_version_one_profile_remains_compatible(self):
+        profile = I2cDeviceProfile.from_dict({
+            "schema": "serial-monitor.i2c-register-map",
+            "version": 1,
+            "name": "Legacy",
+            "device_address": "0x50",
+            "registers": [{"name": "Status", "register": "0x00"}],
+        })
+        self.assertEqual(profile.registers[0].formula, "x")
 
     def test_16_bit_register_address_is_supported(self):
         profile = I2cDeviceProfile(

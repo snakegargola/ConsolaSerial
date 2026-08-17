@@ -30,7 +30,7 @@ fi
 mkdir -p "$ROOT_DIR/dist/linux"
 cp -f "$ROOT_DIR/dist/SerialMonitor" "$ROOT_DIR/dist/linux/SerialMonitor"
 chmod +x "$ROOT_DIR/dist/linux/SerialMonitor"
-cp -f "$ROOT_DIR/config.json" "$ROOT_DIR/dist/linux/config.json"
+cp -f "$ROOT_DIR/config.example.json" "$ROOT_DIR/dist/linux/config.json"
 cp -f "$ROOT_DIR/assets/serial.png" "$ROOT_DIR/dist/linux/serial.png"
 
 echo "Build Linux listo en: $ROOT_DIR/dist/linux"

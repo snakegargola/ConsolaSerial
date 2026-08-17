@@ -12,9 +12,13 @@ SerialPython/
 │   ├── __init__.py
 │   ├── serial_monitor.py        # Ventana principal (PyQt6)
 │   ├── serial_worker.py         # Worker thread para comunicación serial
+│   ├── serial_payload.py        # Validación y vista previa ASCII/HEX
 │   ├── usb_bridge.py            # Catálogo y detección por capacidades
 │   ├── bridge_interface_manager.py # Arbitraje genérico por interfaz
 │   ├── i2c_worker.py            # Workers FTDI/I²C sin bloquear la GUI
+│   ├── i2c_bus.py               # Ajustes, PEC y clasificación de errores
+│   ├── i2c_transaction_lab.py   # UI Raw I²C, SMBus y diagnóstico
+│   ├── i2c_formula.py           # Fórmulas seguras, bits y enumeraciones
 │   ├── i2c_device_inspector.py  # UI de registros, sensores y memorias
 │   ├── i2c_register_map.py      # Modelo versionado de perfiles de registros
 │   ├── i2c_register_map_widget.py # Editor/runner de mapas de registros
@@ -64,9 +68,10 @@ SerialPython/
 **Características:**
 - Tooltips informativos en cada control (🔹)
 - Soporte para ASCII y HEX
+- Validación estricta y vista previa byte por byte antes de transmitir
 - Timestamps en mensajes
 - Alertas por patrones regex
-- Búsqueda y filtrado de logs
+- Búsqueda literal y navegación de coincidencias
 - Estadísticas de transferencia
 
 ### 3. **app/serial_worker.py**
@@ -95,8 +100,7 @@ SerialPython/
 ### 5. **app/log_manager.py**
 **Responsabilidades:**
 - Gestionar logs de sesión
-- Filtrado por patrones
-- Búsqueda en logs completos
+- Búsqueda literal en el monitor
 - Exportación de logs
 
 ### 6. Módulos I²C
@@ -105,10 +109,16 @@ SerialPython/
   memorias. Emite solicitudes y no conoce PyFtdi.
 - `i2c_value_codec.py` implementa el pipeline de shift, máscara, extensión de
   signo, escala y offset; se prueba sin hardware.
+- `i2c_formula.py` limita fórmulas de datasheet y extrae campos de bits sin
+  usar `eval`.
+- `i2c_bus.py` centraliza frecuencia, clock stretching, reintentos, direcciones,
+  PEC SMBus y categorías de error.
+- `i2c_transaction_lab.py` construye solicitudes Raw/SMBus y presenta diagnóstico
+  e historial sin acceder al hardware.
 - `i2c_register_map.py` valida el esquema JSON y mantiene los perfiles separados
   de PyQt y PyFtdi; `i2c_register_map_widget.py` implementa su editor y runner.
-- `i2c_worker.py` posee el acceso USB en threads. Serializa escaneos,
-  transacciones de registro, páginas de memoria, SSD1306 y secuencias.
+- `i2c_worker.py` posee el acceso USB en threads. Ejecuta escaneos, Raw/SMBus,
+  diagnóstico, registros, bancos/páginas de memoria, SSD1306 y secuencias.
 - `serial_monitor.py` actúa como coordinador y mantiene una sola operación I²C
   activa por vez.
 
@@ -169,7 +179,7 @@ Display/Logging
 ✅ Alertas por patrones regex
 ✅ Tema oscuro/claro personalizable
 ✅ Colores personalizables (RX, TX, BG)
-✅ Búsqueda y filtrado
+✅ Búsqueda literal con navegación
 ✅ Estadísticas de transferencia
 ✅ Autoescroll en logs
 ✅ Exportación de logs

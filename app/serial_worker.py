@@ -185,6 +185,14 @@ class SerialWorker(threading.Thread):
 
     def stop(self):
         self._stop_event.set()
+        # Wake a blocking platform read immediately during hot-unplug/shutdown.
+        # The worker thread remains responsible for closing the port.
+        connection = self._serial
+        if connection is not None:
+            try:
+                connection.cancel_read()
+            except (AttributeError, OSError, serial.SerialException):
+                pass
 
     @property
     def is_connected(self):

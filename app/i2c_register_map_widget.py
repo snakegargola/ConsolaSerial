@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 
 from .i2c_register_map import I2cDeviceProfile, RegisterDefinition, parse_int
 from .i2c_value_codec import decode_i2c_value, encode_i2c_value
+from .i2c_formula import evaluate_formula, extract_bit_field, parse_enum_map
 
 
 class I2cRegisterMapWidget(QWidget):
@@ -27,10 +28,11 @@ class I2cRegisterMapWidget(QWidget):
 
     COLUMNS = (
         "Name", "Register", "Bytes", "Access", "Data endian", "Signed",
-        "Bits", "Shift", "Mask", "Scale", "Offset", "Unit", "Raw", "Value",
+        "Bits", "Shift", "Mask", "Scale", "Offset", "Unit", "Formula",
+        "Bit field", "Enum", "Raw", "Value",
     )
-    RAW_COLUMN = 12
-    VALUE_COLUMN = 13
+    RAW_COLUMN = 15
+    VALUE_COLUMN = 16
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -134,8 +136,9 @@ class I2cRegisterMapWidget(QWidget):
         )
         root.addWidget(self.table, stretch=1)
         explanation = QLabel(
-            "Each row comes from the datasheet. Scale and Offset use: "
-            "physical value = decoded integer × scale + offset."
+            "Each row comes from the datasheet. First apply Scale and Offset; "
+            "Formula can then use x, raw, unsigned, or signed. Bit field accepts "
+            "BIT or MSB:LSB and Enum accepts VALUE=Label pairs."
         )
         explanation.setWordWrap(True)
         root.addWidget(explanation)
@@ -161,7 +164,8 @@ class I2cRegisterMapWidget(QWidget):
             "Yes" if register.signed else "No", register.bit_width,
             register.right_shift,
             "" if register.mask is None else f"0x{register.mask:X}",
-            f"{register.scale:g}", f"{register.offset:g}", register.unit, "", "",
+            f"{register.scale:g}", f"{register.offset:g}", register.unit,
+            register.formula, register.bit_field, register.enum_map, "", "",
         )
         for column, value in enumerate(values):
             self.table.setItem(
@@ -222,6 +226,7 @@ class I2cRegisterMapWidget(QWidget):
                     right_shift=parse_int(text(7), "Right shift"),
                     mask=None if not mask_text else parse_int(mask_text, "Mask"),
                     scale=float(text(9)), offset=float(text(10)), unit=text(11),
+                    formula=text(12), bit_field=text(13), enum_map=text(14),
                 ))
             except (AttributeError, ValueError) as exc:
                 raise ValueError(f"Row {row + 1}: {exc}") from exc
@@ -333,6 +338,8 @@ class I2cRegisterMapWidget(QWidget):
                 "right_shift": register.right_shift, "mask": register.mask,
                 "scale": register.scale, "offset": register.offset,
                 "unit": register.unit, "name": register.name,
+                "formula": register.formula, "bit_field": register.bit_field,
+                "enum": register.enum_map,
             },
         }
 
@@ -438,11 +445,22 @@ class I2cRegisterMapWidget(QWidget):
                 bit_width=decode["bit_width"], right_shift=decode["right_shift"],
                 mask=decode["mask"], scale=decode["scale"], offset=decode["offset"],
             )
+            raw_integer = int.from_bytes(data, byteorder=decode["byteorder"])
+            formula_value = evaluate_formula(
+                decode.get("formula", "x"), x=decoded.scaled, raw=raw_integer,
+                unsigned=decoded.unsigned, signed=decoded.signed,
+            )
+            field_value = extract_bit_field(raw_integer, decode.get("bit_field", ""))
+            enum_label = parse_enum_map(decode.get("enum", "")).get(field_value, "")
         except ValueError as exc:
             self.handle_error(f"{decode['name']}: {exc}")
             return
         unit = decode["unit"]
-        value = f"{decoded.scaled:g}{(' ' + unit) if unit else ''}"
+        value = f"{formula_value:g}{(' ' + unit) if unit else ''}"
+        if decode.get("bit_field"):
+            value += f" | bits={field_value}"
+            if enum_label:
+                value += f" ({enum_label})"
         raw_item = self._item(decoded.raw_hex, editable=False)
         raw_item.setToolTip(
             f"Unsigned: {decoded.unsigned}\nSigned: {decoded.signed}\n"
@@ -458,7 +476,9 @@ class I2cRegisterMapWidget(QWidget):
             "device_address": self.device_address.currentText(),
             "name": decode["name"], "register": f"0x{request['register']:X}",
             "raw": decoded.raw_hex, "unsigned": decoded.unsigned,
-            "signed": decoded.signed, "scaled": decoded.scaled, "unit": unit,
+            "signed": decoded.signed, "scaled": decoded.scaled,
+            "formula_value": formula_value, "bit_field": field_value,
+            "enum": enum_label, "unit": unit,
         })
         self.sample_count.setText(f"Samples: {len(self._samples)}")
         QTimer.singleShot(0, self._emit_next_read)
@@ -496,7 +516,8 @@ class I2cRegisterMapWidget(QWidget):
             return
         fields = (
             "timestamp", "profile", "device_address", "name", "register",
-            "raw", "unsigned", "signed", "scaled", "unit",
+            "raw", "unsigned", "signed", "scaled", "formula_value",
+            "bit_field", "enum", "unit",
         )
         try:
             with open(path, "w", encoding="utf-8", newline="") as output:

@@ -3,6 +3,7 @@
 from statistics import mean
 
 from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .i2c_value_codec import decode_i2c_value, encode_i2c_value
+from .i2c_formula import evaluate_formula, extract_bit_field, parse_enum_map
 from .i2c_register_map_widget import I2cRegisterMapWidget
 
 
@@ -44,6 +46,7 @@ class I2cDeviceInspector(QWidget):
         self._poll_pending = False
         self._live_values = []
         self._memory_data = b""
+        self._memory_reference = b""
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_register)
 
@@ -140,24 +143,41 @@ class I2cDeviceInspector(QWidget):
         self.reg_unit.setPlaceholderText("°C, V, Pa...")
         grid.addWidget(self.reg_unit, 3, 5)
 
-        grid.addWidget(QLabel("Write value:"), 4, 0)
+        grid.addWidget(QLabel("Formula:"), 4, 0)
+        self.reg_formula = QLineEdit("x")
+        self.reg_formula.setPlaceholderText("Example: x * 1.8 + 32")
+        self.reg_formula.setToolTip(
+            "Safe arithmetic using x (scaled), raw, unsigned, and signed. "
+            "Allowed functions: abs, min, max, round, sqrt, pow."
+        )
+        grid.addWidget(self.reg_formula, 4, 1, 1, 3)
+        grid.addWidget(QLabel("Bit field:"), 4, 4)
+        self.reg_bit_field = QLineEdit()
+        self.reg_bit_field.setPlaceholderText("7:5 or 3")
+        grid.addWidget(self.reg_bit_field, 4, 5)
+        grid.addWidget(QLabel("Enum:"), 4, 6)
+        self.reg_enum = QLineEdit()
+        self.reg_enum.setPlaceholderText("0=Sleep,1=Active")
+        grid.addWidget(self.reg_enum, 4, 7)
+
+        grid.addWidget(QLabel("Write value:"), 5, 0)
         self.reg_write_value = QLineEdit()
         self.reg_write_value.setPlaceholderText("Example: 01 FF")
-        grid.addWidget(self.reg_write_value, 4, 1, 1, 3)
+        grid.addWidget(self.reg_write_value, 5, 1, 1, 3)
         self.reg_write_format = QComboBox()
         self.reg_write_format.addItems(
             ["HEX bytes", "Decimal", "Hexadecimal", "Octal", "Binary", "ASCII"]
         )
-        grid.addWidget(self.reg_write_format, 4, 4, 1, 2)
+        grid.addWidget(self.reg_write_format, 5, 4, 1, 2)
         self.reg_write_btn = QPushButton("Write register")
         self.reg_write_btn.clicked.connect(self._write_register)
-        grid.addWidget(self.reg_write_btn, 4, 6, 1, 2)
+        grid.addWidget(self.reg_write_btn, 5, 6, 1, 2)
         pipeline = QLabel(
             "Decode order: bytes → byte order → right shift → mask/value bits "
             "→ signed/unsigned → scale → offset."
         )
         pipeline.setWordWrap(True)
-        grid.addWidget(pipeline, 5, 0, 1, 8)
+        grid.addWidget(pipeline, 6, 0, 1, 8)
         root.addWidget(box)
 
         live = QHBoxLayout()
@@ -177,8 +197,12 @@ class I2cDeviceInspector(QWidget):
 
         self.value_table = QTableWidget(0, 2)
         self.value_table.setHorizontalHeaderLabels(["Representation", "Value"])
-        self.value_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.value_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.value_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.value_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
         self.value_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         root.addWidget(self.value_table, stretch=1)
         self.reg_status = QLabel("Ready.")
@@ -228,6 +252,26 @@ class I2cDeviceInspector(QWidget):
         self.mem_write_btn = QPushButton("Write + verify")
         self.mem_write_btn.clicked.connect(self._write_memory)
         config.addWidget(self.mem_write_btn, 1, 7)
+        self.mem_banked = QCheckBox("Address bits in slave address")
+        self.mem_banked.setToolTip(
+            "For EEPROMs such as 24C04/08/16 where upper memory bits select "
+            "consecutive I2C slave addresses."
+        )
+        config.addWidget(self.mem_banked, 2, 0, 1, 2)
+        config.addWidget(QLabel("Bank size:"), 2, 2)
+        self.mem_bank_size = QSpinBox()
+        self.mem_bank_size.setRange(1, 65536)
+        self.mem_bank_size.setValue(256)
+        config.addWidget(self.mem_bank_size, 2, 3)
+        config.addWidget(QLabel("Fill byte:"), 2, 4)
+        self.mem_fill_value = QLineEdit("0xFF")
+        config.addWidget(self.mem_fill_value, 2, 5)
+        fill_btn = QPushButton("Fill buffer")
+        fill_btn.clicked.connect(self._fill_memory_buffer)
+        config.addWidget(fill_btn, 2, 6)
+        reference_btn = QPushButton("Load reference / compare")
+        reference_btn.clicked.connect(self._load_memory_reference)
+        config.addWidget(reference_btn, 2, 7)
         root.addLayout(config)
 
         self.memory_table = QTableWidget(0, 16)
@@ -238,7 +282,9 @@ class I2cDeviceInspector(QWidget):
         self.memory_ascii.setReadOnly(True)
         self.memory_ascii.setMaximumHeight(70)
         root.addWidget(self.memory_ascii)
-        self.mem_status = QLabel("Memory writes require confirmation and are verified after writing.")
+        self.mem_status = QLabel(
+            "Memory writes require confirmation and are verified after writing."
+        )
         root.addWidget(self.mem_status)
         return tab
 
@@ -278,6 +324,9 @@ class I2cDeviceInspector(QWidget):
         self.reg_scale.setValue(preset["scale"])
         self.reg_offset.setValue(preset["offset"])
         self.reg_unit.setText(preset["unit"])
+        self.reg_formula.setText("x")
+        self.reg_bit_field.clear()
+        self.reg_enum.clear()
         self.reg_status.setText(f"Preset loaded: {name}. Confirm it against your datasheet.")
 
     def _common_register_request(self):
@@ -338,7 +387,10 @@ class I2cDeviceInspector(QWidget):
             self.reg_status.setText("Write completed (ACK).")
             return
         try:
-            mask = self._parse_number(self.reg_mask.text(), "Mask") if self.reg_mask.text().strip() else None
+            mask = (
+                self._parse_number(self.reg_mask.text(), "Mask")
+                if self.reg_mask.text().strip() else None
+            )
             decoded = decode_i2c_value(
                 data,
                 byteorder="big" if self.reg_endian.currentIndex() == 0 else "little",
@@ -347,23 +399,37 @@ class I2cDeviceInspector(QWidget):
                 right_shift=self.reg_shift.value(), mask=mask,
                 scale=self.reg_scale.value(), offset=self.reg_offset.value(),
             )
+            byteorder = "big" if self.reg_endian.currentIndex() == 0 else "little"
+            raw_integer = int.from_bytes(data, byteorder=byteorder, signed=False)
+            formula_value = evaluate_formula(
+                self.reg_formula.text(), x=decoded.scaled, raw=raw_integer,
+                unsigned=decoded.unsigned, signed=decoded.signed,
+            )
+            field_value = extract_bit_field(raw_integer, self.reg_bit_field.text())
+            enums = parse_enum_map(self.reg_enum.text())
         except ValueError as exc:
             self.reg_status.setText(f"Decode error: {exc}")
             return
         unit = self.reg_unit.text().strip()
+        field_label = enums.get(field_value, "")
+        field_display = (
+            f"{field_value} ({field_label})" if field_label else str(field_value)
+        )
         rows = (
             ("Raw bytes", decoded.raw_hex), ("Unsigned decimal", str(decoded.unsigned)),
             ("Signed decimal", str(decoded.signed)), ("Hexadecimal", decoded.hexadecimal),
             ("Octal", decoded.octal), ("Binary", decoded.binary),
             ("ASCII", decoded.ascii),
             ("Scaled value", f"{decoded.scaled:g}{(' ' + unit) if unit else ''}"),
+            ("Formula result", f"{formula_value:g}{(' ' + unit) if unit else ''}"),
+            ("Bit field / enum", field_display),
         )
         self.value_table.setRowCount(len(rows))
         for row, (name, value) in enumerate(rows):
             self.value_table.setItem(row, 0, QTableWidgetItem(name))
             self.value_table.setItem(row, 1, QTableWidgetItem(value))
         self.reg_status.setText(f"Read {len(data)} byte(s) successfully.")
-        self._live_values.append(decoded.scaled)
+        self._live_values.append(float(formula_value))
         if len(self._live_values) > 10000:
             self._live_values = self._live_values[-10000:]
         self.live_stats.setText(
@@ -439,20 +505,33 @@ class I2cDeviceInspector(QWidget):
         width = int(self.mem_reg_width.currentData())
         if not 0x03 <= address <= 0x77:
             raise ValueError("Device address must be from 0x03 to 0x77.")
-        if not 0 <= start < (1 << (width * 8)):
-            raise ValueError(f"Start address does not fit in {width * 8} bits.")
         length = self.mem_length.value()
-        if start + length > (1 << (width * 8)):
-            raise ValueError(
-                f"Range 0x{start:X} + {length} bytes exceeds the "
-                f"{width * 8}-bit address space."
-            )
+        bank_size = self.mem_bank_size.value() if self.mem_banked.isChecked() else 0
+        if bank_size:
+            if bank_size > (1 << (width * 8)):
+                raise ValueError(
+                    "Bank size cannot exceed the selected internal address width."
+                )
+            final_bank = (start + length - 1) // bank_size
+            if address + final_bank > 0x77:
+                raise ValueError(
+                    "The selected range would use an I2C bank address above 0x77."
+                )
+        else:
+            if not 0 <= start < (1 << (width * 8)):
+                raise ValueError(f"Start address does not fit in {width * 8} bits.")
+            if start + length > (1 << (width * 8)):
+                raise ValueError(
+                    f"Range 0x{start:X} + {length} bytes exceeds the "
+                    f"{width * 8}-bit address space."
+                )
         return {
             "source": "memory",
             "address": address, "start": start, "register_width": width,
             "big_endian": True, "length": length,
             "page_size": self.mem_page_size.value(),
             "write_delay_ms": self.mem_write_delay.value(),
+            "bank_size": bank_size,
         }
 
     def _read_memory(self):
@@ -504,13 +583,74 @@ class I2cDeviceInspector(QWidget):
         rows = (len(data) + 15) // 16
         self.memory_table.setRowCount(rows)
         start = self._parse_number(self.mem_start.text(), "Start address")
-        self.memory_table.setVerticalHeaderLabels([f"{start + row * 16:04X}:" for row in range(rows)])
+        self.memory_table.setVerticalHeaderLabels([
+            f"{start + row * 16:04X}:" for row in range(rows)
+        ])
         for index, value in enumerate(data):
             item = QTableWidgetItem(f"{value:02X}")
             self.memory_table.setItem(index // 16, index % 16, item)
         self.memory_ascii.setPlainText(
             "".join(chr(value) if 32 <= value <= 126 else "." for value in data)
         )
+        if self._memory_reference:
+            self._highlight_memory_differences(data, self._memory_reference)
+
+    def _fill_memory_buffer(self):
+        try:
+            value = self._parse_number(self.mem_fill_value.text(), "Fill byte")
+            if not 0 <= value <= 0xFF:
+                raise ValueError("Fill byte must be from 0x00 to 0xFF.")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Memory Viewer", str(exc))
+            return
+        self._memory_data = bytes((value,)) * self.mem_length.value()
+        self._populate_memory_table(self._memory_data)
+        self.mem_status.setText(
+            f"Prepared {len(self._memory_data)} byte(s) filled with 0x{value:02X}. "
+            "Press Write + verify to program them."
+        )
+
+    def _load_memory_reference(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load reference binary", "", "Binary (*.bin);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "rb") as source:
+                self._memory_reference = source.read()
+            current = self._collect_memory_table()
+            differences = self._highlight_memory_differences(
+                current, self._memory_reference
+            )
+            self.mem_status.setText(
+                f"Compared against {path}: {differences} differing byte(s); "
+                "differences are highlighted."
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Reference comparison error", str(exc))
+
+    def _highlight_memory_differences(self, current, reference):
+        length = min(len(current), len(reference))
+        # Bytes present only in the reference have no table cell to color.
+        # Bytes present only in the current buffer are counted in the loop.
+        differences = max(0, len(reference) - len(current))
+        for index in range(len(current)):
+            item = self.memory_table.item(index // 16, index % 16)
+            if item is None:
+                continue
+            different = index >= length or current[index] != reference[index]
+            if different:
+                differences += 1
+                item.setBackground(QColor("#7A2525"))
+                item.setToolTip(
+                    "No reference byte" if index >= len(reference)
+                    else f"Reference: {reference[index]:02X}"
+                )
+            else:
+                item.setBackground(QColor("#244D2E"))
+                item.setToolTip("Matches reference")
+        return differences
 
     def _collect_memory_table(self):
         """Collect exactly ``Length`` bytes without silently closing gaps."""
@@ -533,7 +673,9 @@ class I2cDeviceInspector(QWidget):
         return bytes(output)
 
     def _load_binary(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load binary", "", "Binary (*.bin);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load binary", "", "Binary (*.bin);;All files (*)"
+        )
         if not path:
             return
         try:

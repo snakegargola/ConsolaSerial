@@ -1,5 +1,27 @@
 # Historial de Cambios
 
+## En desarrollo (2026-08-16) - Herramientas I²C avanzadas
+
+- Agregado `Transaction Lab` para Raw I²C, repeated START, SMBus y PEC CRC-8.
+- Agregados diagnóstico de SCL/SDA, recuperación segura, clock stretching,
+  frecuencia editable y reintentos compartidos.
+- El inspector admite fórmulas seguras, campos de bits y enumeraciones; los
+  perfiles de registros v2 siguen leyendo perfiles v1.
+- El visor de memoria admite EEPROM por bancos, relleno y comparación BIN.
+- El historial I²C se exporta como CSV/JSON y clasifica errores comunes.
+- Los builds Linux y Windows empaquetan `config.example.json` para no publicar
+  la configuración local del desarrollador.
+- Ampliadas las pruebas automáticas para transacciones, PEC, fórmulas y bancos.
+- Simplificado el monitor a una sola búsqueda literal con contador y navegación;
+  se eliminaron el filtro y Regex de la pantalla principal.
+- Agregada validación estricta para entrada HEX y una vista previa de los bytes
+  exactos por transmitir, incluyendo el terminador EOL TX.
+- `USB Serial / General` y `USB Bridge` son mutuamente excluyentes para evitar
+  abrir dos veces el mismo FTDI.
+- La detección de puentes USB ahora monitorea conexiones en segundo plano,
+  invalida la caché de PyFtdi y reconstruye la interfaz al cambiar de adaptador
+  sin congelar la ventana.
+
 ## v2.0.1 (2026-03-01) - Corrección HEX y release actualizado
 
 ### 🛠️ Correcciones
@@ -132,4 +154,3 @@ Ver `dist/windows-build-source/README_COMPILACION.md` para:
 - Paso a paso de compilación
 - Crear scripts de build automático
 - Distribución del ejecutable
-

@@ -2,11 +2,14 @@
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
-from app.usb_bridge import GPIO, I2C, JTAG, SPI, UART, make_bridge, product_for
+from app.usb_bridge import (
+    GPIO, I2C, JTAG, SPI, UART, discover_usb_bridges, make_bridge, product_for,
+)
 from app.serial_worker import bridge_interface_for_port
 
 
@@ -42,6 +45,24 @@ class UsbBridgeCatalogTests(unittest.TestCase):
     def test_ft232r_does_not_claim_mpsse_protocols(self):
         bridge = make_bridge(vid=0x0403, pid=0x6001)
         self.assertEqual(bridge.interfaces[0].capabilities, frozenset({UART, GPIO}))
+
+    def test_custom_usb_description_does_not_hide_chip_model(self):
+        bridge = make_bridge(
+            vid=0x0403,
+            pid=0x6011,
+            serial="\uffff\uffff5WIGOU",
+            description="USB <->MYUART",
+        )
+        self.assertEqual(bridge.model, "FT4232H")
+        self.assertIn("FT4232H — USB <->MYUART", bridge.label)
+        self.assertIn("S/N 5WIGOU", bridge.label)
+
+    def test_discovery_flushes_pyftdi_hotplug_cache(self):
+        with patch("pyftdi.usbtools.UsbTools.flush_cache") as flush_cache, patch(
+            "pyftdi.ftdi.Ftdi.list_devices", return_value=[]
+        ):
+            self.assertEqual(discover_usb_bridges(), [])
+        flush_cache.assert_called_once_with()
 
     def test_unknown_product_is_not_guessed(self):
         self.assertIsNone(product_for(0x0403, 0xFFFF))

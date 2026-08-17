@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from math import isfinite
 
+from .i2c_formula import extract_bit_field, parse_enum_map
+
 
 def parse_int(value, field_name):
     """Parse an integer stored as a JSON number or a ``0x``/decimal string."""
@@ -45,6 +47,9 @@ class RegisterDefinition:
     scale: float = 1.0
     offset: float = 0.0
     unit: str = ""
+    formula: str = "x"
+    bit_field: str = ""
+    enum_map: str = ""
 
     def __post_init__(self):
         if not self.name.strip():
@@ -79,6 +84,13 @@ class RegisterDefinition:
             )
         if not isfinite(self.scale) or not isfinite(self.offset):
             raise ValueError(f"Register {self.name}: scale and offset must be finite.")
+        if len(self.formula) > 256:
+            raise ValueError(f"Register {self.name}: formula is too long.")
+        try:
+            extract_bit_field(0, self.bit_field)
+            parse_enum_map(self.enum_map)
+        except ValueError as exc:
+            raise ValueError(f"Register {self.name}: {exc}") from exc
 
     def to_dict(self):
         """Return a stable human-readable JSON representation."""
@@ -95,6 +107,9 @@ class RegisterDefinition:
             "scale": self.scale,
             "offset": self.offset,
             "unit": self.unit,
+            "formula": self.formula,
+            "bit_field": self.bit_field,
+            "enum": self.enum_map,
         }
 
     @classmethod
@@ -117,6 +132,9 @@ class RegisterDefinition:
             scale=float(data.get("scale", 1.0)),
             offset=float(data.get("offset", 0.0)),
             unit=str(data.get("unit", "")),
+            formula=str(data.get("formula", "x")),
+            bit_field=str(data.get("bit_field", "")),
+            enum_map=str(data.get("enum", "")),
         )
 
 
@@ -148,7 +166,7 @@ class I2cDeviceProfile:
     def to_dict(self):
         return {
             "schema": "serial-monitor.i2c-register-map",
-            "version": 1,
+            "version": 2,
             "name": self.name,
             "device_address": f"0x{self.device_address:02X}",
             "register_address_bits": self.register_width * 8,
@@ -166,7 +184,7 @@ class I2cDeviceProfile:
         if schema != "serial-monitor.i2c-register-map":
             raise ValueError(f"Unsupported profile schema: {schema}")
         version = parse_int(data.get("version", 1), "Profile version")
-        if version != 1:
+        if version not in (1, 2):
             raise ValueError(f"Unsupported register-map profile version: {version}")
         address_bits = parse_int(
             data.get("register_address_bits", 8), "Register address bits"
