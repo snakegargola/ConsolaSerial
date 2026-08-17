@@ -46,6 +46,7 @@ class UsbBridge:
     address: int | None
     base_url: str
     interfaces: tuple[BridgeInterface, ...]
+    description: str = ""
 
     @property
     def key(self):
@@ -55,8 +56,17 @@ class UsbBridge:
     @property
     def label(self):
         location = f"USB {self.bus}:{self.address}" if self.bus is not None else "USB"
-        serial = f", S/N {self.serial}" if self.serial else ""
-        return f"{self.vendor} {self.model} ({location}{serial})"
+        display_serial = "".join(
+            character
+            for character in self.serial
+            if character.isprintable() and ord(character) < 127
+        ).strip()
+        serial = f", S/N {display_serial}" if display_serial else ""
+        custom_name = (
+            f" — {self.description}"
+            if self.description and self.description != self.model else ""
+        )
+        return f"{self.vendor} {self.model}{custom_name} ({location}{serial})"
 
 
 @dataclass(frozen=True)
@@ -124,9 +134,7 @@ def make_bridge(*, vid, pid, serial="", bus=None, address=None,
         BridgeInterface(index, interface_name(index), product_interfaces[index - 1])
         for index in range(1, count + 1)
     )
-    model = detected_model
-    if description and description.strip() and int(pid) != 0x6010:
-        model = description.strip()
+    description = description.strip()
     if bus is not None and address is not None:
         selector = f"{int(bus)}:{int(address)}"
     elif serial:
@@ -137,16 +145,22 @@ def make_bridge(*, vid, pid, serial="", bus=None, address=None,
         selector = "1"
     base_url = f"ftdi://0x{int(vid):04x}:0x{int(pid):04x}:{selector}"
     return UsbBridge(
-        backend="pyftdi", vendor="FTDI", model=model,
+        backend="pyftdi", vendor="FTDI", model=detected_model,
         vid=int(vid), pid=int(pid), serial=str(serial or ""),
         bus=None if bus is None else int(bus),
         address=None if address is None else int(address),
-        base_url=base_url, interfaces=interfaces,
+        base_url=base_url, interfaces=interfaces, description=description,
     )
 
 
 def discover_usb_bridges():
-    """Discover known bridges through PyFtdi without importing it at startup."""
+    """Discover known bridges through PyFtdi without stale hot-plug data.
+
+    PyFtdi intentionally caches USB enumeration results. That is useful while
+    opening several interfaces of one adapter, but it otherwise keeps a device
+    that was unplugged and misses its replacement. Discovery is the explicit
+    inventory boundary, so clear only that enumeration cache before scanning.
+    """
     try:
         from pyftdi.ftdi import Ftdi
     except ImportError:
@@ -156,6 +170,7 @@ def discover_usb_bridges():
 
     bridges = []
     seen = set()
+    UsbTools.flush_cache()
     for device, interface_count in Ftdi.list_devices("ftdi://ftdi/?"):
         device_version = None
         if getattr(device, "pid", 0) == 0x6010:
@@ -183,6 +198,13 @@ def discover_usb_bridges():
         if bridge and bridge.key not in seen:
             seen.add(bridge.key)
             bridges.append(bridge)
+    bridges.sort(key=lambda bridge: (
+        bridge.vid,
+        bridge.pid,
+        bridge.serial,
+        -1 if bridge.bus is None else bridge.bus,
+        -1 if bridge.address is None else bridge.address,
+    ))
     return bridges
 
 

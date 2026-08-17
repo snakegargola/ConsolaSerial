@@ -31,6 +31,8 @@ DEFAULT_CONFIG = {
     "i2c_device_url": "",
     "i2c_channel": 1,
     "i2c_frequency": 100000,
+    "i2c_clock_stretching": False,
+    "i2c_retry_count": 3,
     "usb_bridge_modes": {},
     "usb_bridge_sessions": {},
     # Legacy keys are retained so existing config.json files remain readable.

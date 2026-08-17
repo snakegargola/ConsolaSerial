@@ -40,7 +40,9 @@ una operación activa. Primero hay que desconectar UART o esperar/detener I²C.
 `USB Serial / General` permite trabajar con adaptadores y puertos seriales que
 no pertenecen al FT4232H: CH340, CP210x, PL2303, CDC/ACM, puertos COM y otros.
 Las cuatro interfaces del FT4232 detectado se excluyen de esa lista y aparecen
-en `USB Bridge`, evitando abrir accidentalmente el mismo puerto dos veces.
+en `USB Bridge`, evitando abrir accidentalmente el mismo puerto dos veces. Para
+que la selección sea inequívoca, al detectar un puente compatible se oculta la
+pestaña General; vuelve a mostrarse cuando ya no hay un puente detectado.
 
 ## Persistencia
 

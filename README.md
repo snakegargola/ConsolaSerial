@@ -21,20 +21,28 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 - Conexión serial configurable: puerto, baud rate, data bits, parity, stop bits y flow control
 - Consola `USB Serial / General` para CH340, CP210x, PL2303, CDC/ACM, puertos
   COM y adaptadores seriales no administrados por el workspace de protocolos
+- `USB Serial / General` y `USB Bridge` se alternan automáticamente: General se
+  oculta mientras un puente compatible está administrado y vuelve al retirarlo
+- Monitoreo USB en segundo plano para sustituir adaptadores sin congelar la UI
 - Detección por capacidades de FT232R, FT-X, FT232H, FT2232 y FT4232H/HA/HP
-- Escáner I²C mediante MPSSE, con selección automática de interfaces compatibles
-  y reloj de 100/400 kHz
+- Escáner I²C mediante MPSSE, selección automática de interfaces compatibles,
+  reloj editable, reintentos y clock stretching opcional
+- Laboratorio Raw I²C/SMBus con repeated START, PEC, diagnóstico/recuperación
+  del bus e historial exportable
 - Workspace `USB Bridge` con sesiones independientes según las interfaces reales
   del adaptador conectado
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
-  máscara, escala, offset, unidades y lectura periódica
+  máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y
   exportación de muestras a CSV
-- Visor de memorias I²C con matriz HEX/ASCII, archivos BIN, escritura por
-  páginas y verificación posterior
+- Visor de memorias I²C con matriz HEX/ASCII, archivos BIN, bancos EEPROM,
+  comparación, escritura por páginas y verificación posterior
 - **Tooltips informativos** (NUEVO v2) - Aprende cada parámetro
 - Recepción y envío en tiempo real
 - Formatos de envío: `ASCII` y `HEX`
+- Vista previa en HEX de los bytes exactos que se enviarán, incluyendo EOL TX
+- Entrada HEX protegida: solo acepta dígitos `0-9`, `A-F` y espacios, y bloquea
+  el envío cuando falta completar un byte
 - Soporte de fin de línea TX/RX: `None`, `LF`, `CR`, `CR+LF`
 - Monitor con timestamp, vista ASCII/HEX
 - Historial de comandos
@@ -52,10 +60,11 @@ Nota de uso para `HEX`:
 - Cuando `Fmt = HEX`, el campo `Command` debe contener bytes hexadecimales válidos.
 - Ejemplos válidos: `AA 55`, `01 03 00 00 00 02 C4 0B`.
 - Si escribes texto normal (por ejemplo `hola mundo`) con `Fmt = HEX`, la app mostrará advertencia de formato inválido.
+- En el panel `Send`, `Will send (HEX)` muestra también los bytes agregados por
+  `EOL TX`; por ejemplo `AA 55` con `LF` se transmite como `AA 55 0A`.
 
 ### Monitoreo Avanzado
-- **🔍 Búsqueda en tiempo real** con navegación y resaltado
-- **📌 Filtros** (texto o regex) para ocultar mensajes no relevantes
+- **🔍 Búsqueda literal en tiempo real** con navegación y resaltado
 - **📊 Estadísticas**: velocidad (B/s), RX total, TX total
 - **🔔 Alertas** configurables por patrón (texto o regex)
 
@@ -202,6 +211,7 @@ La pestaña `USB Bridge` usa PyFtdi y escanea las direcciones I²C de 7 bits
 `0x03` a `0x77`. Conecta `xDBUS0` a SCL y une `xDBUS1` con `xDBUS2` para
 SDA; ambas líneas requieren resistencias pull-up.
 
+`Transaction Lab` permite probar I²C crudo y funciones SMBus con historial.
 `Device Inspector` trabaja con direcciones de dispositivo I²C de 7 bits. Su
 pestaña `Register / Sensor` lee y escribe registros de 8 o 16 bits, decodifica
 los bytes como decimal, HEX, octal, binario, ASCII y valor escalado, y puede

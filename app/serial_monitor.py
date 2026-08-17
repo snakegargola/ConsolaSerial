@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (QColor, QFont, QTextCharFormat, QTextCursor, QPalette,
                          QShortcut, QKeySequence, QAction, QImage, QPixmap,
-                         QPainter, QTransform)
+                         QPainter, QTransform, QValidator)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 
 from .config_manager import ConfigManager, ScopedConfig, DEFAULT_CONFIG
@@ -32,11 +32,14 @@ from .serial_worker import (
 from .i2c_worker import (
     I2cScanWorker, I2cTransactionWorker, Ssd1306Worker, I2cRawWriteWorker,
     I2cSequenceWorker, I2cMemoryWorker, list_i2c_bridge_devices,
-    ssd1306_init_steps,
+    I2cLabWorker, I2cBusDiagnosticWorker, ssd1306_init_steps,
 )
 from .log_manager import LogManager
 from .display_image_converter import convert_image
 from .i2c_device_inspector import I2cDeviceInspector
+from .i2c_transaction_lab import I2cTransactionLab
+from .i2c_bus import I2cBusSettings
+from .serial_payload import encode_serial_payload, format_payload_preview
 from .bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
@@ -56,6 +59,25 @@ EOL_TX_MAP = {"None": b"", "LF": b"\n", "CR": b"\r", "CR+LF": b"\r\n"}
 SEND_FMTS  = ["ASCII","HEX"]
 
 
+class HexByteValidator(QValidator):
+    """Allow only whitespace-separated HEX digits in the send field."""
+
+    def validate(self, text, position):
+        if any(
+            not character.isspace()
+            and character not in "0123456789abcdefABCDEF"
+            for character in text
+        ):
+            return QValidator.State.Invalid, text, position
+        digits = "".join(text.split())
+        state = (
+            QValidator.State.Acceptable
+            if digits and len(digits) % 2 == 0
+            else QValidator.State.Intermediate
+        )
+        return state, text, position
+
+
 # Worker signals bridge (PyQt signals must live in QObject)
 class _Signals(QObject):
     data_received = pyqtSignal(bytes)
@@ -70,24 +92,27 @@ class _Signals(QObject):
     i2c_display_done = pyqtSignal(str)
     i2c_sequence_step = pyqtSignal(int)
     i2c_sequence_done = pyqtSignal(bool)
+    i2c_lab_done = pyqtSignal(object)
+    i2c_lab_error = pyqtSignal(object)
+    i2c_diagnostic_done = pyqtSignal(object)
+    usb_bridges_discovered = pyqtSignal(object, str)
 
 
 class SerialMonitorApp(QMainWindow):
     def __init__(self, config: ConfigManager):
         super().__init__()
         self.config = config
-        if not hasattr(self, "channel_manager"):
-            self.usb_bridge_detection_error = ""
-            try:
-                self.usb_bridge_adapters = discover_usb_bridges()
-            except Exception as exc:
-                self.usb_bridge_adapters = []
-                self.usb_bridge_detection_error = str(exc)
-            self.active_bridge = (
-                self.usb_bridge_adapters[0] if self.usb_bridge_adapters else None
-            )
+        self._manages_usb_bridges = not hasattr(self, "channel_manager")
+        if self._manages_usb_bridges:
+            self.usb_bridge_detection_error = "Detecting adapters…"
+            self.usb_bridge_adapters = []
+            self.active_bridge = None
             self.channel_manager = UsbBridgeInterfaceManager(capabilities={})
+            self._bridge_refresh_running = False
+            self._bridge_refresh_was_manual = False
+            self._closing = False
         self.worker: SerialWorker | None = None
+        self._connection_established = False
         self.i2c_worker: I2cScanWorker | None = None
         self.log = LogManager()
         self._signals = _Signals()
@@ -103,6 +128,13 @@ class SerialMonitorApp(QMainWindow):
         self._signals.i2c_display_done.connect(self._i2c_display_done)
         self._signals.i2c_sequence_step.connect(self._i2c_sequence_step_done)
         self._signals.i2c_sequence_done.connect(self._i2c_sequence_finished)
+        self._signals.i2c_lab_done.connect(self._i2c_lab_done)
+        self._signals.i2c_lab_error.connect(self._i2c_lab_error)
+        self._signals.i2c_diagnostic_done.connect(self._i2c_diagnostic_done)
+        if self._manages_usb_bridges:
+            self._signals.usb_bridges_discovered.connect(
+                self._usb_bridge_discovery_finished
+            )
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._send_data)
         
@@ -121,11 +153,10 @@ class SerialMonitorApp(QMainWindow):
         self._stats_timer.timeout.connect(self._update_statistics)
         self._stats_timer.start(1000)  # Update every second
         
-        # Search and filters
+        # Simple literal search
         self._search_text = ""
-        self._filter_text = ""
-        self._filter_regex = False
-        self._full_log_buffer = []  # Full unfiltered log
+        self._search_results = []
+        self._search_result_index = -1
         
         # Alerts
         self._alerts = []  # List of {"pattern": str, "regex": bool, "sound": bool}
@@ -140,6 +171,12 @@ class SerialMonitorApp(QMainWindow):
         self._build_ui()
         self._load_config_into_ui()
         self._setup_shortcuts()
+        if self._manages_usb_bridges:
+            self._bridge_monitor_timer = QTimer(self)
+            self._bridge_monitor_timer.setInterval(3000)
+            self._bridge_monitor_timer.timeout.connect(self._refresh_usb_bridges)
+            self._bridge_monitor_timer.start()
+            QTimer.singleShot(0, self._refresh_usb_bridges)
 
     # ──────────────────────────────────────────────────────────────────────────
     # UI
@@ -201,9 +238,11 @@ class SerialMonitorApp(QMainWindow):
             message = self.usb_bridge_detection_error or "No supported adapter detected"
             self.usb_bridge_combo.addItem(message, None)
         selector.addWidget(self.usb_bridge_combo, stretch=1)
-        refresh = QPushButton("Refresh adapters")
-        refresh.clicked.connect(self._refresh_usb_bridges)
-        selector.addWidget(refresh)
+        self.usb_bridge_refresh_btn = QPushButton("Refresh adapters")
+        self.usb_bridge_refresh_btn.clicked.connect(
+            lambda: self._refresh_usb_bridges(manual=True)
+        )
+        selector.addWidget(self.usb_bridge_refresh_btn)
         outer.addLayout(selector)
         self.usb_bridge_capabilities = QLabel()
         self.usb_bridge_capabilities.setWordWrap(True)
@@ -253,7 +292,7 @@ class SerialMonitorApp(QMainWindow):
         if bridge is None:
             self.channel_manager = UsbBridgeInterfaceManager(capabilities={})
             self.usb_bridge_capabilities.setText(
-                "Connect a supported bridge and press Refresh adapters."
+                "Connect a supported bridge; detection updates automatically."
             )
             self.usb_bridge_note.setText(
                 "The general USB serial tab remains available for ordinary adapters."
@@ -403,12 +442,29 @@ class SerialMonitorApp(QMainWindow):
         grid.addWidget(self.i2c_channel_combo, 1, 1)
         grid.addWidget(QLabel("Clock:"), 1, 2)
         self.i2c_frequency_combo = QComboBox()
+        self.i2c_frequency_combo.addItem("10 kHz", 10_000)
+        self.i2c_frequency_combo.addItem("50 kHz", 50_000)
         self.i2c_frequency_combo.addItem("100 kHz", 100_000)
         self.i2c_frequency_combo.addItem("400 kHz", 400_000)
+        self.i2c_frequency_combo.addItem("1 MHz", 1_000_000)
+        self.i2c_frequency_combo.setEditable(True)
+        self.i2c_frequency_combo.setToolTip(
+            "Select a preset or type a frequency such as 250 kHz or 100000 Hz."
+        )
         grid.addWidget(self.i2c_frequency_combo, 1, 3)
+        self.i2c_clock_stretching = QCheckBox("Clock stretching")
+        self.i2c_clock_stretching.setToolTip(
+            "Requires xDBUS7 connected to SCL. Check the adapter wiring note."
+        )
+        grid.addWidget(self.i2c_clock_stretching, 1, 4)
+        grid.addWidget(QLabel("Retries:"), 1, 5)
+        self.i2c_retry_count = QSpinBox()
+        self.i2c_retry_count.setRange(1, 16)
+        self.i2c_retry_count.setValue(3)
+        grid.addWidget(self.i2c_retry_count, 1, 6)
         addressing = QLabel("Device addressing: 7-bit")
         addressing.setStyleSheet("font-weight:bold; color:#2E8B57;")
-        grid.addWidget(addressing, 2, 0, 1, 4)
+        grid.addWidget(addressing, 2, 0, 1, 7)
         root.addWidget(config_box)
 
         wiring = QLabel(
@@ -421,6 +477,8 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_tools_tabs = QTabWidget()
         scanner_tab = QWidget()
         scanner_root = QVBoxLayout(scanner_tab)
+        lab_tab = QWidget()
+        lab_root = QVBoxLayout(lab_tab)
         read_write_tab = QWidget()
         read_write_root = QVBoxLayout(read_write_tab)
         display_tab = QWidget()
@@ -428,6 +486,7 @@ class SerialMonitorApp(QMainWindow):
         trace_tab = QWidget()
         trace_root = QVBoxLayout(trace_tab)
         self.i2c_tools_tabs.addTab(scanner_tab, "Scanner")
+        self.i2c_tools_tabs.addTab(lab_tab, "Transaction Lab")
         self.i2c_tools_tabs.addTab(read_write_tab, "Device Inspector")
         self.i2c_tools_tabs.addTab(display_tab, "Display Test")
         self.i2c_tools_tabs.addTab(trace_tab, "Sequence Builder")
@@ -454,6 +513,15 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_summary = QLabel("Press Scan I²C bus to search addresses 0x03–0x77.")
         self.i2c_summary.setWordWrap(True)
         scanner_root.addWidget(self.i2c_summary)
+
+        self.i2c_transaction_lab = I2cTransactionLab()
+        self.i2c_transaction_lab.transaction_requested.connect(
+            self._start_i2c_lab_transaction
+        )
+        self.i2c_transaction_lab.diagnostic_requested.connect(
+            self._start_i2c_diagnostic
+        )
+        lab_root.addWidget(self.i2c_transaction_lab)
 
         self.i2c_device_inspector = I2cDeviceInspector()
         self.i2c_device_inspector.register_read_requested.connect(
@@ -940,7 +1008,8 @@ class SerialMonitorApp(QMainWindow):
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("🔍 Search:"))
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search in log...")
+        self.search_edit.setPlaceholderText("Type text to find...")
+        self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._search_in_monitor)
         search_layout.addWidget(self.search_edit)
         
@@ -956,24 +1025,6 @@ class SerialMonitorApp(QMainWindow):
         self.search_result_lbl = QLabel("")
         search_layout.addWidget(self.search_result_lbl)
         vbox.addLayout(search_layout)
-        
-        # Filter bar
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("📌 Filter:"))
-        self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText("Filter messages (leave empty to show all)...")
-        self.filter_edit.textChanged.connect(self._apply_filter)
-        filter_layout.addWidget(self.filter_edit)
-        
-        self.filter_regex_chk = QCheckBox("Regex")
-        self.filter_regex_chk.toggled.connect(self._apply_filter)
-        filter_layout.addWidget(self.filter_regex_chk)
-        
-        btn_filter_clear = QPushButton("Clear")
-        btn_filter_clear.setFixedWidth(60)
-        btn_filter_clear.clicked.connect(lambda: self.filter_edit.setText(""))
-        filter_layout.addWidget(btn_filter_clear)
-        vbox.addLayout(filter_layout)
         
         # Alert management
         alert_layout = QHBoxLayout()
@@ -1007,9 +1058,10 @@ class SerialMonitorApp(QMainWindow):
         self.send_fmt = QComboBox(); self.send_fmt.addItems(SEND_FMTS); self.send_fmt.setFixedWidth(80)
         grid.addWidget(self.send_fmt, 0, 5)
 
-        btn_send = QPushButton("Send"); btn_send.setFixedWidth(70)
-        btn_send.clicked.connect(self._send_data)
-        grid.addWidget(btn_send, 0, 6)
+        self.send_btn = QPushButton("Send")
+        self.send_btn.setFixedWidth(70)
+        self.send_btn.clicked.connect(self._send_data)
+        grid.addWidget(self.send_btn, 0, 6)
 
         grid.addWidget(QLabel("History:"), 0, 7)
         self.history_combo = QComboBox(); self.history_combo.setFixedWidth(200)
@@ -1018,17 +1070,32 @@ class SerialMonitorApp(QMainWindow):
 
         grid.setColumnStretch(1, 1)
 
-        # Row 1 — auto send
-        grid.addWidget(QLabel("Auto-send interval (s):"), 1, 0, 1, 2)
+        grid.addWidget(QLabel("Will send (HEX):"), 1, 0)
+        self.send_preview = QLineEdit()
+        self.send_preview.setReadOnly(True)
+        self.send_preview.setPlaceholderText("Enter data to see the exact bytes")
+        self.send_preview.setToolTip(
+            "Exact bytes that will be transmitted, including EOL TX."
+        )
+        grid.addWidget(self.send_preview, 1, 1, 1, 8)
+
+        # Row 2 — auto send
+        grid.addWidget(QLabel("Auto-send interval (s):"), 2, 0, 1, 2)
         self.interval_spin = QDoubleSpinBox()
         self.interval_spin.setRange(0.1, 3600); self.interval_spin.setSingleStep(0.5)
         self.interval_spin.setValue(1.0); self.interval_spin.setFixedWidth(80)
-        grid.addWidget(self.interval_spin, 1, 2)
+        grid.addWidget(self.interval_spin, 2, 2)
 
         self.auto_btn = QPushButton("Start Auto"); self.auto_btn.setFixedWidth(100)
         self.auto_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
         self.auto_btn.clicked.connect(self._toggle_auto_send)
-        grid.addWidget(self.auto_btn, 1, 3)
+        grid.addWidget(self.auto_btn, 2, 3)
+
+        self._hex_send_validator = HexByteValidator(self.send_edit)
+        self.send_edit.textChanged.connect(self._update_send_preview)
+        self.send_fmt.currentTextChanged.connect(self._send_format_changed)
+        self.eol_tx_combo.currentTextChanged.connect(self._update_send_preview)
+        self._send_format_changed()
 
         return box
 
@@ -1123,6 +1190,37 @@ class SerialMonitorApp(QMainWindow):
     # Port helpers
     # ──────────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _general_console_should_be_visible(has_protocol_bridge):
+        """Show the generic console only when no protocol bridge is managed."""
+        return not has_protocol_bridge
+
+    def _update_console_tab_visibility(self):
+        """Expose one unambiguous workspace for the detected hardware.
+
+        A supported bridge owns its UART interfaces and belongs in USB Bridge.
+        Without one, the generic console remains available for ordinary serial
+        adapters and the empty bridge workspace stays out of the way.
+        """
+        if not hasattr(self, "main_tabs"):
+            return
+        has_protocol_bridge = bool(self.usb_bridge_adapters)
+        general_visible = self._general_console_should_be_visible(
+            has_protocol_bridge
+        )
+        self.main_tabs.setTabVisible(0, general_visible)
+        self.main_tabs.setTabVisible(1, has_protocol_bridge)
+        if general_visible:
+            self.main_tabs.setTabToolTip(
+                0,
+                "Serial console for COM, ttyUSB, ttyACM, and USB-UART devices.",
+            )
+            self.main_tabs.setCurrentIndex(0)
+        else:
+            # The detected bridge owns its UART interfaces, so presenting the
+            # same hardware again as General would be ambiguous.
+            self.main_tabs.setCurrentIndex(1)
+
     def _refresh_ports(self):
         """List ordinary serial ports while reserving known USB bridges."""
         current = self.port_combo.currentData()
@@ -1130,13 +1228,15 @@ class SerialMonitorApp(QMainWindow):
         # If PyFtdi/libusb is unavailable, do not hide usable FTDI VCP ports
         # from the ordinary serial console.
         reserve_detected_bridges = bool(self.usb_bridge_adapters)
-        for label, device in list_port_details(
+        general_ports = list(list_port_details(
             include_usb_bridges=not reserve_detected_bridges
-        ):
+        ))
+        for label, device in general_ports:
             self.port_combo.addItem(label, device)
         index = self.port_combo.findData(current)
         if index >= 0:
             self.port_combo.setCurrentIndex(index)
+        self._update_console_tab_visibility()
 
     def _usb_bridge_modes_changed(self):
         if hasattr(self, "port_combo"):
@@ -1152,21 +1252,104 @@ class SerialMonitorApp(QMainWindow):
             self._rebuild_usb_bridge_workspace()
             self._refresh_ports()
 
-    def _refresh_usb_bridges(self):
+    def _refresh_usb_bridges(self, manual=False):
+        """Request bridge discovery without blocking the Qt event loop."""
+        if not self._manages_usb_bridges or self._closing:
+            return
+        if self._bridge_refresh_running:
+            if manual:
+                self.statusBar().showMessage("Adapter detection is already running.", 2000)
+            return
+
+        self._bridge_refresh_running = True
+        self._bridge_refresh_was_manual = bool(manual)
+        self.usb_bridge_refresh_btn.setEnabled(False)
+        if manual:
+            self.statusBar().showMessage("Detecting USB protocol bridges…")
+
+        completion_signal = self._signals.usb_bridges_discovered
+
+        def discover_in_background():
+            try:
+                bridges = discover_usb_bridges()
+                error = ""
+            except Exception as exc:
+                bridges = []
+                error = str(exc)
+            completion_signal.emit(bridges, error)
+
+        threading.Thread(
+            target=discover_in_background,
+            name="usb-bridge-discovery",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _bridge_inventory_signature(bridges):
+        """Return the hardware details that require rebuilding the workspace."""
+        return tuple(
+            (
+                bridge.key,
+                bridge.base_url,
+                tuple(
+                    (interface.name, tuple(sorted(interface.capabilities)))
+                    for interface in bridge.interfaces
+                ),
+            )
+            for bridge in bridges
+        )
+
+    def _usb_bridge_discovery_finished(self, bridges, error):
+        """Apply a completed discovery result in the Qt GUI thread."""
+        self._bridge_refresh_running = False
+        if self._closing:
+            return
+        self.usb_bridge_refresh_btn.setEnabled(True)
+        was_manual = self._bridge_refresh_was_manual
+        self._bridge_refresh_was_manual = False
+
+        if error:
+            self.usb_bridge_detection_error = error
+            # A transient libusb failure must not destroy working sessions.
+            # With no prior inventory, keep General available and expose the
+            # failure in the selector so it can be diagnosed.
+            if not self.usb_bridge_adapters:
+                self.usb_bridge_combo.blockSignals(True)
+                self.usb_bridge_combo.clear()
+                self.usb_bridge_combo.addItem(f"Detection error: {error}", None)
+                self.usb_bridge_combo.blockSignals(False)
+                self._update_console_tab_visibility()
+            if was_manual:
+                self.statusBar().showMessage(
+                    f"USB bridge detection failed: {error}", 6000
+                )
+            return
+
+        self.usb_bridge_detection_error = ""
+        if self._bridge_inventory_signature(
+            bridges
+        ) == self._bridge_inventory_signature(self.usb_bridge_adapters):
+            if not bridges:
+                self.usb_bridge_combo.blockSignals(True)
+                self.usb_bridge_combo.clear()
+                self.usb_bridge_combo.addItem(
+                    "No supported adapter detected", None
+                )
+                self.usb_bridge_combo.blockSignals(False)
+                self._update_console_tab_visibility()
+            if was_manual:
+                self.statusBar().showMessage("USB adapter list is already current.", 2500)
+            return
+
+        previous_models = [bridge.model for bridge in self.usb_bridge_adapters]
         current_key = self.active_bridge.key if self.active_bridge else ""
-        try:
-            bridges = discover_usb_bridges()
-            error = ""
-        except Exception as exc:
-            bridges = []
-            error = str(exc)
-        self.usb_bridge_adapters = bridges
+        self.usb_bridge_adapters = list(bridges)
         self.usb_bridge_combo.blockSignals(True)
         self.usb_bridge_combo.clear()
         for bridge in bridges:
             self.usb_bridge_combo.addItem(bridge.label, bridge)
         if not bridges:
-            self.usb_bridge_combo.addItem(error or "No supported adapter detected", None)
+            self.usb_bridge_combo.addItem("No supported adapter detected", None)
         selected = next(
             (index for index, bridge in enumerate(bridges) if bridge.key == current_key),
             0,
@@ -1175,6 +1358,15 @@ class SerialMonitorApp(QMainWindow):
         self.usb_bridge_combo.blockSignals(False)
         self._rebuild_usb_bridge_workspace()
         self._refresh_ports()
+
+        current_models = [bridge.model for bridge in bridges]
+        if current_models:
+            message = f"USB adapter detected: {', '.join(current_models)}"
+        elif previous_models:
+            message = "USB protocol bridge disconnected. General console enabled."
+        else:
+            message = "No supported USB protocol bridge detected."
+        self.statusBar().showMessage(message, 4000)
 
     def _refresh_i2c_channels(self):
         current = self.i2c_channel_combo.currentData()
@@ -1191,7 +1383,7 @@ class SerialMonitorApp(QMainWindow):
             self.i2c_channel_combo.setCurrentIndex(index)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # FTDI I2C scanner
+    # USB bridge I2C tools
     # ──────────────────────────────────────────────────────────────────────────
 
     def _refresh_i2c_devices(self):
@@ -1219,6 +1411,32 @@ class SerialMonitorApp(QMainWindow):
         base = self.i2c_device_combo.currentData()
         return f"{base}/{self.i2c_channel_combo.currentData()}"
 
+    def _i2c_bus_settings(self):
+        """Validate the editable clock and return settings shared by all tools."""
+        preset = self.i2c_frequency_combo.currentData()
+        if preset is not None:
+            frequency = int(preset)
+        else:
+            text = self.i2c_frequency_combo.currentText().strip().lower()
+            match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(mhz|khz|hz)?", text)
+            if not match:
+                raise ValueError(
+                    "Clock must look like 100 kHz, 1 MHz, or 100000 Hz."
+                )
+            value = float(match.group(1))
+            unit = match.group(2)
+            if unit == "mhz":
+                frequency = round(value * 1_000_000)
+            elif unit == "khz" or (unit is None and value <= 3400):
+                frequency = round(value * 1_000)
+            else:
+                frequency = round(value)
+        return I2cBusSettings(
+            frequency=frequency,
+            clock_stretching=self.i2c_clock_stretching.isChecked(),
+            retry_count=self.i2c_retry_count.value(),
+        )
+
     def _reset_i2c_matrix(self):
         for address in range(0x80):
             row, column = divmod(address, 16)
@@ -1234,6 +1452,8 @@ class SerialMonitorApp(QMainWindow):
     def _clear_i2c_scanned_addresses(self):
         if hasattr(self, "i2c_device_inspector"):
             self.i2c_device_inspector.set_addresses([])
+        if hasattr(self, "i2c_transaction_lab"):
+            self.i2c_transaction_lab.set_addresses([])
         if hasattr(self, "i2c_display_address"):
             current_display = self.i2c_display_address.currentText()
             self.i2c_display_address.clear()
@@ -1248,6 +1468,7 @@ class SerialMonitorApp(QMainWindow):
         item = self.i2c_matrix.item(row, column)
         if item and item.text() == f"{address:02X}":
             self.i2c_device_inspector.select_address(address)
+            self.i2c_transaction_lab.select_address(address)
             self.i2c_tools_tabs.setCurrentIndex(1)
 
     def _toggle_i2c_scan(self):
@@ -1263,15 +1484,21 @@ class SerialMonitorApp(QMainWindow):
             QMessageBox.warning(self, "I²C", "Assign channel A or B to I2C first.")
             return
         url = self._i2c_url()
-        frequency = int(self.i2c_frequency_combo.currentData())
+        try:
+            settings = self._i2c_bus_settings()
+        except ValueError as exc:
+            QMessageBox.warning(self, "I²C clock", str(exc))
+            return
         self.i2c_device_inspector.pause_polling()
         self.i2c_device_inspector.setEnabled(False)
         self._reset_i2c_matrix()
-        self.i2c_summary.setText(f"Scanning {url} at {frequency / 1000:g} kHz…")
+        self.i2c_summary.setText(
+            f"Scanning {url} at {settings.frequency / 1000:g} kHz…"
+        )
         self.i2c_progress_bar.setValue(0)
         self.i2c_scan_btn.setText("Stop scan")
         self.i2c_worker = I2cScanWorker(
-            url, frequency,
+            url, settings,
             lambda address: self._signals.i2c_found.emit(address),
             lambda current, total: self._signals.i2c_progress.emit(current, total),
             lambda found, stopped, actual: self._signals.i2c_done.emit(found, stopped, actual),
@@ -1299,6 +1526,7 @@ class SerialMonitorApp(QMainWindow):
             f"Actual clock: {actual_frequency / 1000:g} kHz."
         )
         self.i2c_device_inspector.set_addresses(found)
+        self.i2c_transaction_lab.set_addresses(found)
         self.i2c_display_address.clear()
         self.i2c_display_address.addItems([f"0x{address:02X}" for address in found])
         self.i2c_sequence_address.clear()
@@ -1339,7 +1567,7 @@ class SerialMonitorApp(QMainWindow):
         if hasattr(self, "i2c_run_sequence_btn"):
             self.i2c_run_sequence_btn.setEnabled(True)
             self.i2c_run_sequence_btn.setText("Run all")
-        QMessageBox.critical(self, "FTDI I²C error", error)
+        QMessageBox.critical(self, "USB Bridge I²C error", error)
 
     @staticmethod
     def _parse_i2c_number(text, name):
@@ -1347,6 +1575,75 @@ class SerialMonitorApp(QMainWindow):
             return int(text.strip(), 0)
         except ValueError as exc:
             raise ValueError(f"{name} must be decimal or hexadecimal (0x...).") from exc
+
+    def _start_i2c_lab_transaction(self, request):
+        """Run one Raw-I2C or SMBus request from Transaction Lab."""
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_transaction_lab.handle_error({
+                **request, "status": "BUSY",
+                "error": "Wait for the current I²C operation to finish.",
+            })
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            self.i2c_transaction_lab.handle_error({
+                **request, "status": "NO ADAPTER",
+                "error": "Select an I²C-capable adapter interface first.",
+            })
+            return
+        try:
+            settings = self._i2c_bus_settings()
+        except ValueError as exc:
+            self.i2c_transaction_lab.handle_error({
+                **request, "status": "INVALID", "error": str(exc),
+            })
+            return
+        self.i2c_device_inspector.pause_polling()
+        self.i2c_scan_btn.setEnabled(False)
+        self.i2c_worker = I2cLabWorker(
+            self._i2c_url(), settings, request,
+            lambda result: self._signals.i2c_lab_done.emit(result),
+            lambda error: self._signals.i2c_lab_error.emit(error),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_lab_done(self, result):
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_transaction_lab.handle_result(result)
+
+    def _i2c_lab_error(self, result):
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_transaction_lab.handle_error(result)
+
+    def _start_i2c_diagnostic(self, action):
+        """Check or recover the selected physical I2C lines."""
+        if self.i2c_worker and self.i2c_worker.is_alive():
+            self.i2c_transaction_lab.handle_diagnostic({
+                "action": action, "status": "BUSY",
+                "error": "Wait for the current I²C operation to finish.",
+            })
+            return
+        if not self.i2c_device_combo.currentData() or self.i2c_channel_combo.currentData() is None:
+            self.i2c_transaction_lab.handle_diagnostic({
+                "action": action, "status": "NO ADAPTER",
+                "error": "Select an I²C-capable adapter interface first.",
+            })
+            return
+        self.i2c_transaction_lab.set_busy(True)
+        self.i2c_device_inspector.pause_polling()
+        self.i2c_scan_btn.setEnabled(False)
+        self.i2c_worker = I2cBusDiagnosticWorker(
+            self._i2c_url(), action,
+            lambda result: self._signals.i2c_diagnostic_done.emit(result),
+            lambda error: self._signals.i2c_diagnostic_done.emit(error),
+        )
+        self.i2c_worker.start()
+
+    def _i2c_diagnostic_done(self, result):
+        self.i2c_worker = None
+        self.i2c_scan_btn.setEnabled(True)
+        self.i2c_transaction_lab.handle_diagnostic(result)
 
     def _start_i2c_inspector_transaction(self, operation, request):
         """Start one generic register transaction requested by the inspector."""
@@ -1362,8 +1659,14 @@ class SerialMonitorApp(QMainWindow):
             )
             return
         self.i2c_scan_btn.setEnabled(False)
+        try:
+            settings = self._i2c_bus_settings()
+        except ValueError as exc:
+            self.i2c_device_inspector.handle_operation_error(str(exc), request)
+            self.i2c_scan_btn.setEnabled(True)
+            return
         self.i2c_worker = I2cTransactionWorker(
-            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            self._i2c_url(), settings,
             operation, request["address"], request["register"],
             request["register_width"], request["big_endian"],
             request.get("payload", b""), request["length"],
@@ -1393,12 +1696,19 @@ class SerialMonitorApp(QMainWindow):
             )
             return
         self.i2c_scan_btn.setEnabled(False)
+        try:
+            settings = self._i2c_bus_settings()
+        except ValueError as exc:
+            self.i2c_device_inspector.handle_operation_error(str(exc), request)
+            self.i2c_scan_btn.setEnabled(True)
+            return
         self.i2c_worker = I2cMemoryWorker(
-            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            self._i2c_url(), settings,
             operation, request["address"], request["start"],
             request["register_width"], request["big_endian"],
             request["length"], request.get("payload", b""),
             request["page_size"], request["write_delay_ms"],
+            request.get("bank_size", 0),
             lambda action, data: self._signals.i2c_memory_done.emit(action, data),
             lambda error: self._signals.i2c_inspector_error.emit(error, request),
         )
@@ -1436,6 +1746,7 @@ class SerialMonitorApp(QMainWindow):
             )
             if not 0x03 <= address <= 0x77:
                 raise ValueError("The 7-bit display address must be from 0x03 to 0x77.")
+            settings = self._i2c_bus_settings()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid I²C value", str(exc))
             return
@@ -1449,7 +1760,7 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_device_inspector.setEnabled(False)
         self.i2c_display_status.setText(f"SSD1306 {action} in progress…")
         self.i2c_worker = Ssd1306Worker(
-            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            self._i2c_url(), settings,
             address, width, height, action,
             lambda completed: self._signals.i2c_display_done.emit(completed),
             lambda error: self._signals.i2c_error.emit(error),
@@ -1706,6 +2017,7 @@ class SerialMonitorApp(QMainWindow):
                 self.i2c_display_address.currentText(), "Display address"
             )
             framebuffer = self._i2c_canvas_framebuffer()
+            settings = self._i2c_bus_settings()
         except ValueError as exc:
             QMessageBox.warning(self, "Display preview", str(exc))
             return
@@ -1714,7 +2026,7 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_device_inspector.setEnabled(False)
         self.i2c_display_status.setText("Sending preview framebuffer…")
         self.i2c_worker = Ssd1306Worker(
-            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            self._i2c_url(), settings,
             address, width, height, "custom",
             lambda completed: self._signals.i2c_display_done.emit(completed),
             lambda error: self._signals.i2c_error.emit(error),
@@ -2052,6 +2364,7 @@ class SerialMonitorApp(QMainWindow):
         try:
             address = self._i2c_sequence_address_value()
             step = self._prepare_i2c_sequence_steps()[row]
+            settings = self._i2c_bus_settings()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid trace step", str(exc))
             return
@@ -2068,7 +2381,7 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_device_inspector.setEnabled(False)
         self.i2c_trace_status.setText(f"Running step {row + 1}…")
         self.i2c_worker = I2cRawWriteWorker(
-            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            self._i2c_url(), settings,
             address, step["payload"],
             lambda completed: self._signals.i2c_display_done.emit(completed),
             lambda error: self._signals.i2c_error.emit(error),
@@ -2092,6 +2405,7 @@ class SerialMonitorApp(QMainWindow):
             steps = self._prepare_i2c_sequence_steps()
             if not steps:
                 raise ValueError("Add at least one sequence step.")
+            settings = self._i2c_bus_settings()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid sequence", str(exc))
             return
@@ -2100,7 +2414,7 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_run_sequence_btn.setText("Stop sequence")
         self.i2c_trace_status.setText(f"Running {len(steps)} steps…")
         self.i2c_worker = I2cSequenceWorker(
-            self._i2c_url(), int(self.i2c_frequency_combo.currentData()),
+            self._i2c_url(), settings,
             address, steps,
             lambda index: self._signals.i2c_sequence_step.emit(index),
             lambda stopped: self._signals.i2c_sequence_done.emit(stopped),
@@ -2196,6 +2510,7 @@ class SerialMonitorApp(QMainWindow):
                 "This setup is only required once."
             )
             return
+        self._connection_established = False
         self.worker = SerialWorker(
             port=port,
             baud=int(self.baud_combo.currentText()),
@@ -2212,6 +2527,7 @@ class SerialMonitorApp(QMainWindow):
 
     def _check_connected(self):
         if self.worker and self.worker.is_connected:
+            self._connection_established = True
             self.connect_btn.setText("Disconnect")
             self.connect_btn.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
             self.led_lbl.setStyleSheet("color:#00FF7F; font-size:18px;")
@@ -2220,6 +2536,7 @@ class SerialMonitorApp(QMainWindow):
             self._disconnect()
 
     def _disconnect(self):
+        self._connection_established = False
         if self.worker:
             self.worker.stop()
             self.worker.join(timeout=2)
@@ -2248,7 +2565,16 @@ class SerialMonitorApp(QMainWindow):
             self.rx_lbl.setText(f"RX: {self._human(self.worker.rx_bytes)}")
 
     def _handle_error(self, error: str):
+        was_connected = self._connection_established
         self._disconnect()
+        if was_connected:
+            # Hot-unplug is expected during adapter replacement. Keep the GUI
+            # responsive and report it without a modal dialog that looks like
+            # an application freeze.
+            message = f"Serial device disconnected: {error}"
+            self.conn_lbl.setText("Disconnected — device removed")
+            self.statusBar().showMessage(message, 6000)
+            return
         QMessageBox.critical(self, "Serial Error", error)
 
     def _format_line(self, data: bytes, direction: str) -> str:
@@ -2268,16 +2594,46 @@ class SerialMonitorApp(QMainWindow):
         return "  ".join(parts) + "\n"
 
     def _append(self, text: str, color: str):
-        # Add to full buffer
-        self._full_log_buffer.append((text, color))
-        
-        # Only display if matches filter
-        if self._filter_matches(text):
-            self._append_raw(text, color)
+        self._append_raw(text, color)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Sending
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _send_format_changed(self, *_args):
+        """Apply strict HEX editing only while HEX format is selected."""
+        is_hex = self.send_fmt.currentText() == "HEX"
+        self.send_edit.setValidator(
+            self._hex_send_validator if is_hex else None
+        )
+        self.send_edit.setPlaceholderText(
+            "Example: AA 55 0D 0A" if is_hex else "Text to send"
+        )
+        self._update_send_preview()
+
+    def _current_send_payload(self):
+        eol = EOL_TX_MAP.get(self.eol_tx_combo.currentText(), b"\n")
+        return encode_serial_payload(
+            self.send_edit.text(), self.send_fmt.currentText(), eol
+        )
+
+    def _update_send_preview(self, *_args):
+        """Show exact outgoing bytes and prevent incomplete transmissions."""
+        try:
+            payload = self._current_send_payload()
+        except ValueError as exc:
+            valid = False
+            self.send_preview.setText(str(exc) if self.send_edit.text() else "")
+            self.send_preview.setStyleSheet("color:#FF7777;")
+        else:
+            valid = True
+            self.send_preview.setText(format_payload_preview(payload))
+            self.send_preview.setStyleSheet("color:#70DB93;")
+
+        if not valid and self._auto_timer.isActive():
+            self._toggle_auto_send()
+        self.send_btn.setEnabled(valid)
+        self.auto_btn.setEnabled(valid or self._auto_timer.isActive())
 
     def _send_data(self):
         if not self.worker or not self.worker.is_connected:
@@ -2286,16 +2642,11 @@ class SerialMonitorApp(QMainWindow):
         text = self.send_edit.text()
         if not text:
             return
-        eol = EOL_TX_MAP.get(self.eol_tx_combo.currentText(), b"\n")
         try:
-            if self.send_fmt.currentText() == "HEX":
-                payload = bytes.fromhex(text.replace(" ", ""))
-            else:
-                payload = text.encode("utf-8")
-            payload += eol
-        except ValueError:
-            QMessageBox.critical(self, "Format Error",
-                                 "Invalid HEX string. Use space-separated bytes: AA BB CC")
+            payload = self._current_send_payload()
+        except ValueError as exc:
+            self._update_send_preview()
+            self.statusBar().showMessage(str(exc), 5000)
             return
         self.worker.send(payload)
         line = self._format_line(payload, "TX")
@@ -2555,15 +2906,11 @@ class SerialMonitorApp(QMainWindow):
         eol = EOL_TX_MAP.get(self.eol_tx_combo.currentText(), b"\n")
         fmt = self._get_sequence_command_format(index)
         try:
-            if fmt == "HEX":
-                payload = bytes.fromhex(cmd_text.replace(" ", ""))
-            else:
-                payload = cmd_text.encode("utf-8")
-            payload += eol
-        except ValueError:
+            payload = encode_serial_payload(cmd_text, fmt, eol)
+        except ValueError as exc:
             if fmt == "HEX":
                 self.statusBar().showMessage(
-                    f"Invalid HEX at row {index + 1}. Use bytes like: AA 55 0D 0A",
+                    f"Invalid HEX at row {index + 1}: {exc}",
                     5000,
                 )
             else:
@@ -2601,14 +2948,12 @@ class SerialMonitorApp(QMainWindow):
         eol = EOL_TX_MAP.get(self.eol_tx_combo.currentText(), b"\n")
         fmt = self._get_sequence_command_format(index)
         try:
+            payload = encode_serial_payload(expanded, fmt, eol)
+        except ValueError as exc:
             if fmt == "HEX":
-                payload = bytes.fromhex(expanded.replace(" ", ""))
-            else:
-                payload = expanded.encode("utf-8")
-            payload += eol
-        except ValueError:
-            if fmt == "HEX":
-                msg = f"El comando de la fila {index + 1} no es HEX válido. Ejemplo: AA 55 0D 0A"
+                msg = (
+                    f"El comando de la fila {index + 1} no es HEX válido: {exc}"
+                )
                 self.statusBar().showMessage(msg, 5000)
                 QMessageBox.warning(self, "Formato HEX inválido", msg)
             else:
@@ -2822,126 +3167,91 @@ class SerialMonitorApp(QMainWindow):
     # ──────────────────────────────────────────────────────────────────────────
     
     def _search_in_monitor(self):
-        """Search for text in monitor"""
+        """Find literal text in the visible monitor, case-insensitively."""
         self._search_text = self.search_edit.text()
+        self._search_result_index = -1
+        self._refresh_search_results()
+
+    def _refresh_search_results(self, preserve_index=False):
+        """Rebuild non-destructive highlights for the current literal text."""
+        previous_index = self._search_result_index if preserve_index else -1
+        self._search_results = []
+        if self._search_text:
+            cursor = QTextCursor(self.monitor.document())
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            while True:
+                cursor = self.monitor.document().find(self._search_text, cursor)
+                if cursor.isNull():
+                    break
+                self._search_results.append(QTextCursor(cursor))
+
+        if previous_index >= 0 and self._search_results:
+            self._search_result_index = min(
+                previous_index, len(self._search_results) - 1
+            )
+        elif not preserve_index:
+            self._search_result_index = -1
+        else:
+            self._search_result_index = -1
+
+        self._render_search_highlights()
         if not self._search_text:
-            self.search_result_lbl.setText("")
-            self._clear_search_highlights()
-            return
-        
-        # Find all matches
-        text = self.monitor.toPlainText()
-        if self._search_text.lower() in text.lower():
-            matches = text.lower().count(self._search_text.lower())
-            self.search_result_lbl.setText(f"{matches} matches")
-            self._highlight_search_matches()
+            self.search_result_lbl.clear()
+        elif self._search_results:
+            if self._search_result_index >= 0:
+                self.search_result_lbl.setText(
+                    f"{self._search_result_index + 1}/{len(self._search_results)}"
+                )
+            else:
+                self.search_result_lbl.setText(
+                    f"{len(self._search_results)} match(es)"
+                )
         else:
             self.search_result_lbl.setText("No matches")
-            self._clear_search_highlights()
-    
-    def _highlight_search_matches(self):
-        """Highlight all search matches in monitor"""
-        if not self._search_text:
+
+    def _render_search_highlights(self):
+        """Use extra selections so RX/TX text colors are never modified."""
+        selections = []
+        for index, result_cursor in enumerate(self._search_results):
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = QTextCursor(result_cursor)
+            selection.format.setBackground(QColor(
+                "#FFB300" if index == self._search_result_index else "#FFFF00"
+            ))
+            selection.format.setForeground(QColor("#000000"))
+            selections.append(selection)
+        self.monitor.setExtraSelections(selections)
+
+    def _select_search_result(self, index):
+        if not self._search_results:
             return
-        
-        cursor = self.monitor.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        
-        # Format for highlighting
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor("#FFFF00"))  # Yellow background
-        fmt.setForeground(QColor("#000000"))  # Black text
-        
-        # Find and highlight all matches
-        while True:
-            cursor = self.monitor.document().find(self._search_text, cursor)
-            if cursor.isNull():
-                break
-            cursor.mergeCharFormat(fmt)
-    
-    def _clear_search_highlights(self):
-        """Clear search highlights"""
-        cursor = self.monitor.textCursor()
-        cursor.select(QTextCursor.SelectionType.Document)
-        fmt = QTextCharFormat()
-        cursor.setCharFormat(fmt)
+        self._search_result_index = index % len(self._search_results)
+        cursor = QTextCursor(self._search_results[self._search_result_index])
         self.monitor.setTextCursor(cursor)
+        self.monitor.ensureCursorVisible()
+        self.search_result_lbl.setText(
+            f"{self._search_result_index + 1}/{len(self._search_results)}"
+        )
+        self._render_search_highlights()
     
     def _search_next(self):
-        """Find next search match"""
-        if not self._search_text:
-            return
-        cursor = self.monitor.textCursor()
-        found_cursor = self.monitor.document().find(self._search_text, cursor)
-        if not found_cursor.isNull():
-            self.monitor.setTextCursor(found_cursor)
-        else:
-            # Wrap to beginning
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
-            found_cursor = self.monitor.document().find(self._search_text, cursor)
-            if not found_cursor.isNull():
-                self.monitor.setTextCursor(found_cursor)
+        """Select the next match, wrapping to the beginning."""
+        if self._search_results:
+            self._select_search_result(self._search_result_index + 1)
     
     def _search_previous(self):
-        """Find previous search match"""
-        if not self._search_text:
+        """Select the previous match, wrapping to the end."""
+        if not self._search_results:
             return
-        cursor = self.monitor.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Left)
-        found_cursor = self.monitor.document().find(
-            self._search_text, cursor, 
-            self.monitor.document().FindFlag.FindBackward
+        index = (
+            len(self._search_results) - 1
+            if self._search_result_index < 0
+            else self._search_result_index - 1
         )
-        if not found_cursor.isNull():
-            self.monitor.setTextCursor(found_cursor)
-        else:
-            # Wrap to end
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            found_cursor = self.monitor.document().find(
-                self._search_text, cursor,
-                self.monitor.document().FindFlag.FindBackward
-            )
-            if not found_cursor.isNull():
-                self.monitor.setTextCursor(found_cursor)
-    
-    # ──────────────────────────────────────────────────────────────────────────
-    # Filters
-    # ──────────────────────────────────────────────────────────────────────────
-    
-    def _apply_filter(self):
-        """Apply filter to monitor display"""
-        self._filter_text = self.filter_edit.text()
-        self._filter_regex = self.filter_regex_chk.isChecked()
-        
-        if not self._filter_text:
-            # Show all
-            self.monitor.clear()
-            for line in self._full_log_buffer:
-                self._append_raw(line[0], line[1])  # text, color
-            return
-        
-        # Filter and display
-        self.monitor.clear()
-        for line in self._full_log_buffer:
-            text = line[0]
-            if self._filter_matches(text):
-                self._append_raw(text, line[1])
-    
-    def _filter_matches(self, text: str) -> bool:
-        """Check if text matches current filter"""
-        if not self._filter_text:
-            return True
-        
-        if self._filter_regex:
-            try:
-                return bool(re.search(self._filter_text, text, re.IGNORECASE))
-            except re.error:
-                return False
-        else:
-            return self._filter_text.lower() in text.lower()
+        self._select_search_result(index)
     
     def _append_raw(self, text: str, color: str):
-        """Append text to monitor without adding to buffer"""
+        """Append colored text and refresh an active literal search."""
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
         cursor = self.monitor.textCursor()
@@ -2949,6 +3259,8 @@ class SerialMonitorApp(QMainWindow):
         cursor.insertText(text, fmt)
         self.monitor.setTextCursor(cursor)
         self.monitor.ensureCursorVisible()
+        if self._search_text:
+            self._refresh_search_results(preserve_index=True)
     
     # ──────────────────────────────────────────────────────────────────────────
     # Alerts
@@ -3159,7 +3471,9 @@ class SerialMonitorApp(QMainWindow):
     def _clear_monitor(self):
         self.monitor.clear()
         self.log.clear()
-        self._full_log_buffer.clear()
+        self._search_results.clear()
+        self._search_result_index = -1
+        self._refresh_search_results()
 
     def _save_log(self):
         if len(self.log) == 0:
@@ -3269,6 +3583,9 @@ class SerialMonitorApp(QMainWindow):
             combo.setCurrentIndex(idx)
 
     def closeEvent(self, event):
+        if self._manages_usb_bridges:
+            self._closing = True
+            self._bridge_monitor_timer.stop()
         self._collect_config()
         if hasattr(self, "usb_bridge_uart_sessions"):
             for session in self.usb_bridge_uart_sessions.values():
@@ -3461,13 +3778,29 @@ class I2cSessionPanel(SerialMonitorApp):
         )
         if index >= 0:
             self.i2c_frequency_combo.setCurrentIndex(index)
+        else:
+            self.i2c_frequency_combo.setEditText(
+                f"{int(self.config.get('i2c_frequency', 100000))} Hz"
+            )
+        self.i2c_clock_stretching.setChecked(
+            bool(self.config.get("i2c_clock_stretching", False))
+        )
+        self.i2c_retry_count.setValue(
+            int(self.config.get("i2c_retry_count", 3))
+        )
         if self.config.get("theme", "dark") == "light":
             self._apply_light_theme()
 
     def _collect_config(self):
         self.config.set("i2c_device_url", self.i2c_device_combo.currentData() or "")
         self.config.set("i2c_channel", self.session_interface)
-        self.config.set("i2c_frequency", int(self.i2c_frequency_combo.currentData()))
+        try:
+            settings = self._i2c_bus_settings()
+        except ValueError:
+            settings = I2cBusSettings()
+        self.config.set("i2c_frequency", settings.frequency)
+        self.config.set("i2c_clock_stretching", settings.clock_stretching)
+        self.config.set("i2c_retry_count", settings.retry_count)
 
     def _setup_shortcuts(self):
         pass

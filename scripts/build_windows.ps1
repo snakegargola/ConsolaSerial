@@ -27,7 +27,7 @@ if (-not (Test-Path $pythonBin)) {
 
 New-Item -Path "$RootDir\dist\windows" -ItemType Directory -Force | Out-Null
 Copy-Item "$RootDir\dist\SerialMonitor.exe" "$RootDir\dist\windows\SerialMonitor.exe" -Force
-Copy-Item "$RootDir\config.json" "$RootDir\dist\windows\config.json" -Force
+Copy-Item "$RootDir\config.example.json" "$RootDir\dist\windows\config.json" -Force
 Copy-Item "$RootDir\assets\serial.ico" "$RootDir\dist\windows\serial.ico" -Force
 
 Write-Host "Build Windows listo en: $RootDir\dist\windows"

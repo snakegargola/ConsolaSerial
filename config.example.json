@@ -27,6 +27,9 @@
   "sequence_mode": "Restart",
   "usb_bridge_modes": {},
   "usb_bridge_sessions": {},
+  "i2c_frequency": 100000,
+  "i2c_clock_stretching": false,
+  "i2c_retry_count": 3,
   "alerts": [
     {
       "pattern": "ERROR",
