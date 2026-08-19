@@ -9,6 +9,21 @@ from dataclasses import dataclass
 from typing import FrozenSet, Iterable
 
 
+def configure_pyftdi_backend():
+    """Make PyFtdi prefer the application backend with packaged fallback."""
+    try:
+        from pyftdi.usbtools import UsbTools
+    except ImportError:
+        return False
+    from . import usb_backend
+
+    preferred = usb_backend.__name__
+    UsbTools.BACKENDS = (preferred,) + tuple(
+        backend for backend in UsbTools.BACKENDS if backend != preferred
+    )
+    return True
+
+
 UART = "UART"
 I2C = "I2C"
 SPI = "SPI"
@@ -17,6 +32,10 @@ GPIO = "GPIO"
 MPSSE_PROTOCOLS = frozenset({UART, I2C, SPI, JTAG, GPIO})
 LEGACY_MPSSE_PROTOCOLS = frozenset({UART, SPI, JTAG, GPIO})
 UART_GPIO = frozenset({UART, GPIO})
+
+# Configure once at import time, before discovery or an I2C/SPI worker opens
+# the device. This does not enumerate USB or interfere with ordinary UART.
+configure_pyftdi_backend()
 
 
 @dataclass(frozen=True)

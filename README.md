@@ -12,7 +12,7 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 📁 **Organización del Proyecto:**
 - Documentación completa en carpeta `docs/`
 - Ejecutable Linux listo en `dist/linux/`
-- Proyecto compilable para Windows en `dist/windows-build-source/`
+- Build reproducible para Windows con preparación y autoprueba automática
 - Instrucciones de permisos para Linux serial
 
 ## Características Principales
@@ -31,6 +31,9 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
   del bus e historial exportable
 - Workspace `USB Bridge` con sesiones independientes según las interfaces reales
   del adaptador conectado
+- Maestro SPI por interfaz MPSSE con modos 0–3, reloj editable, hasta cinco
+  señales `/CS`, escritura, lectura, Write→Read, full-duplex e historial
+- Pruebas rápidas SPI de loopback MOSI→MISO e identificación JEDEC `0x9F`
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
   máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y
@@ -54,6 +57,8 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 
 Consulta [`docs/UART.md`](docs/UART.md) para el cableado de loopback, seguridad
 eléctrica y significado de las señales de control.
+Consulta [`docs/SPI.md`](docs/SPI.md) para el cableado MPSSE, significado de los
+modos, tipos de transacción y pruebas rápidas SPI.
 
 ### Secuencias de Comandos
 - **Lista ordenada de comandos** con reordenamiento ( ↑↓ )
@@ -82,7 +87,7 @@ Nota de uso para `HEX`:
 
 ### Build y Distribución
 - ✅ Ejecutables compilados para Linux: `dist/linux/SerialMonitor`
-- 🔧 Proyecto listo para compilar en Windows: `dist/windows-build-source/`
+- 🔧 Script único para preparar, probar y compilar en Windows
 - 📚 Documentación completa
 
 📖 **[Ver documentación completa de funcionalidades →](FEATURES.md)**
@@ -112,7 +117,7 @@ Ver instrucciones en: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
 
 ### 🔧 Windows - Compilación 
 
-Instrucciones completas en: [`dist/windows-build-source/README_COMPILACION.md`](dist/windows-build-source/README_COMPILACION.md)
+Instrucciones completas en: [`docs/WINDOWS.md`](docs/WINDOWS.md)
 ## Instalación y Ejecución
 
 ### Modo Desarrollo
@@ -142,7 +147,7 @@ python main.py
 Ver: [`dist/linux/LEEME.md`](dist/linux/LEEME.md)
 
 **Windows:**
-Compilar con instrucciones en: [`dist/windows-build-source/README_COMPILACION.md`](dist/windows-build-source/README_COMPILACION.md)
+Compilar con instrucciones en: [`docs/WINDOWS.md`](docs/WINDOWS.md)
 
 ## Documentación
 
@@ -154,8 +159,12 @@ Compilar con instrucciones en: [`dist/windows-build-source/README_COMPILACION.md
 - **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** - Guía de desarrollo
 - **[`docs/I2C.md`](docs/I2C.md)** - Uso y arquitectura de Scanner, Inspector,
   memorias, pantallas y secuencias I²C
+- **[`docs/SPI.md`](docs/SPI.md)** - Transacciones, loopback, JEDEC, cableado y
+  límites de la herramienta SPI
 - **[`docs/USB_BRIDGES.md`](docs/USB_BRIDGES.md)** - Modelos detectados,
   capacidades, concurrencia y persistencia por interfaz
+- **[`docs/WINDOWS.md`](docs/WINDOWS.md)** - Ejecución, driver FTDI/libusb,
+  autoprueba y compilación reproducible en Windows
 - **[`FEATURES.md`](FEATURES.md)** - Características detalladas
 - **[`BUILD.md`](BUILD.md)** - Instrucciones de compilación
 
@@ -167,6 +176,9 @@ Serialpython/
 ├── app/                             # Código fuente
 │   ├── serial_monitor.py            # Ventana principal (PyQt6)
 │   ├── serial_worker.py             # Worker thread serial
+│   ├── spi_bus.py                   # Validación/transacciones SPI
+│   ├── spi_worker.py                # Worker PyFtdi SPI
+│   ├── spi_session_panel.py         # Laboratorio SPI por interfaz
 │   ├── config_manager.py            # Gestión de config
 │   └── log_manager.py               # Gestión de logs
 ├── dist/
@@ -175,15 +187,14 @@ Serialpython/
 │   │   ├── LEEME.md                 # Instrucciones
 │   │   ├── config.json
 │   │   └── serial.png
-│   ├── windows/                     # 📝 Instrucciones para compilar
-│   │   └── BUILD_INSTRUCCIONES.md
-│   └── windows-build-source/        # 🔧 Proyecto para compilar en Windows
-│       ├── app/                     # Código fuente
-│       ├── main.py
-│       ├── requirements.txt
-│       └── README_COMPILACION.md
+│   └── windows/                     # Paquete generado en Windows
+│       ├── SerialMonitor.exe
+│       ├── config.json
+│       └── LEEME-WINDOWS.md
 ├── docs/                            # 📚 Documentación técnica
 │   ├── ARCHITECTURE.md
+│   ├── SPI.md
+│   ├── WINDOWS.md
 │   └── DEVELOPMENT.md
 ├── assets/
 ├── scripts/
@@ -204,7 +215,7 @@ Serialpython/
 📚 **Documentación Completa:**
 - Documentación técnica en `docs/`
 - Instrucciones Linux en `dist/linux/LEEME.md`
-- Guía Windows en `dist/windows-build-source/`
+- Guía Windows en `docs/WINDOWS.md`
 
 ⚙️ **Build Listo:**
 - Ejecutable Linux funcional en `dist/linux/`

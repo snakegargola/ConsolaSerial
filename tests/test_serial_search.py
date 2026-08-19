@@ -93,6 +93,35 @@ class SerialSearchTests(unittest.TestCase):
         self.assertFalse(window.main_tabs.isTabVisible(0))
         self.assertTrue(window.main_tabs.isTabVisible(1))
 
+    def test_ft4232_spi_is_selectable_only_on_mpsse_interfaces(self):
+        ft4232 = make_bridge(
+            vid=0x0403, pid=0x6011, serial="SPI-TEST", interface_count=4
+        )
+        with patch("app.serial_monitor.discover_usb_bridges", return_value=[]):
+            window = SerialMonitorApp(_MemoryConfig())
+        self.addCleanup(window.close)
+        window._usb_bridge_discovery_finished([ft4232], "")
+
+        modes_a = [
+            window.usb_bridge_mode_combos["A"].itemText(index)
+            for index in range(window.usb_bridge_mode_combos["A"].count())
+        ]
+        modes_c = [
+            window.usb_bridge_mode_combos["C"].itemText(index)
+            for index in range(window.usb_bridge_mode_combos["C"].count())
+        ]
+        self.assertEqual(modes_a, ["UART", "I2C", "SPI"])
+        self.assertEqual(modes_c, ["UART"])
+
+        window.usb_bridge_mode_combos["A"].setCurrentText("SPI")
+        window._apply_usb_bridge_workspace_modes(show_error=False)
+        self.assertEqual(window.channel_manager.mode("A"), "SPI")
+        self.assertIs(
+            window.usb_bridge_channel_stacks["A"].currentWidget(),
+            window.usb_bridge_spi_sessions["A"],
+        )
+        self.assertEqual(window.channel_manager.owner("A"), "SPI session A")
+
     def test_literal_search_replaces_filter_and_wraps_navigation(self):
         window = self._window()
 

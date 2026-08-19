@@ -41,11 +41,12 @@ from .i2c_transaction_lab import I2cTransactionLab
 from .i2c_bus import I2cBusSettings
 from .serial_payload import encode_serial_payload, format_payload_preview
 from .uart_tools_widget import UartToolsPanel
+from .spi_session_panel import SpiSessionPanel
 from .bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
 from .usb_bridge import (
-    I2C, UART, capability_summary, discover_usb_bridges,
+    I2C, SPI, UART, capability_summary, discover_usb_bridges,
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -285,12 +286,15 @@ class SerialMonitorApp(QMainWindow):
             session.shutdown_session()
         for session in getattr(self, "usb_bridge_i2c_sessions", {}).values():
             session.shutdown_session()
+        for session in getattr(self, "usb_bridge_spi_sessions", {}).values():
+            session.shutdown_session()
         self.usb_bridge_channel_tabs.clear()
         self._clear_layout(self.usb_bridge_modes_layout)
         self.usb_bridge_mode_combos = {}
         self.usb_bridge_channel_stacks = {}
         self.usb_bridge_uart_sessions = {}
         self.usb_bridge_i2c_sessions = {}
+        self.usb_bridge_spi_sessions = {}
         bridge = self.usb_bridge_combo.currentData()
         self.active_bridge = bridge
         if bridge is None:
@@ -317,7 +321,7 @@ class SerialMonitorApp(QMainWindow):
         for interface in bridge.interfaces:
             default_mode = I2C if I2C in interface.capabilities else UART
             requested = str(saved_modes.get(interface.name, default_mode)).upper()
-            implemented = {UART, I2C} & interface.capabilities
+            implemented = {UART, I2C, SPI} & interface.capabilities
             requested_modes[interface.name] = (
                 requested if requested in implemented else default_mode
             )
@@ -329,14 +333,14 @@ class SerialMonitorApp(QMainWindow):
         )
         self.usb_bridge_note.setText(
             "Each interface is independent. Only capabilities reported for this "
-            "chip are shown. SPI/JTAG/GPIO are identified now and their panels "
+            "chip are shown. JTAG/GPIO are identified now and their panels "
             "will become selectable when those tools are added."
         )
 
         for interface in bridge.interfaces:
             channel = interface.name
             implemented = [
-                protocol for protocol in (UART, I2C)
+                protocol for protocol in (UART, I2C, SPI)
                 if protocol in interface.capabilities
             ]
             self.usb_bridge_modes_layout.addWidget(QLabel(f"Interface {channel}:"))
@@ -374,6 +378,17 @@ class SerialMonitorApp(QMainWindow):
                 )
                 self.usb_bridge_i2c_sessions[channel] = i2c
                 stack.addWidget(i2c)
+            if SPI in interface.capabilities:
+                spi_config = ScopedConfig(
+                    self.config,
+                    ("usb_bridge_sessions", bridge.key, channel, "spi"),
+                    DEFAULT_CONFIG,
+                )
+                spi = SpiSessionPanel(
+                    interface, bridge, spi_config, self.channel_manager
+                )
+                self.usb_bridge_spi_sessions[channel] = spi
+                stack.addWidget(spi)
             page_root.addWidget(stack)
             self.usb_bridge_channel_tabs.addTab(page, f"Interface {channel}")
         self.usb_bridge_modes_layout.addStretch()
@@ -389,10 +404,7 @@ class SerialMonitorApp(QMainWindow):
             desired = combo.currentText().upper()
             current = self.channel_manager.mode(channel)
             if desired != current:
-                current_session = (
-                    self.usb_bridge_uart_sessions[channel]
-                    if current == UART else self.usb_bridge_i2c_sessions[channel]
-                )
+                current_session = self._usb_bridge_session(channel, current)
                 if current_session.is_session_active():
                     combo.blockSignals(True)
                     combo.setCurrentText(current)
@@ -416,16 +428,22 @@ class SerialMonitorApp(QMainWindow):
                             QMessageBox.warning(self, "Adapter interface busy", str(exc))
                         desired = current
             stack = self.usb_bridge_channel_stacks[channel]
-            target = (
-                self.usb_bridge_uart_sessions.get(channel)
-                if desired == UART else self.usb_bridge_i2c_sessions.get(channel)
-            )
+            target = self._usb_bridge_session(channel, desired)
             stack.setCurrentWidget(target)
-            if desired == I2C:
+            if desired in (I2C, SPI):
                 target.activate_session()
             self.usb_bridge_channel_tabs.setTabText(
                 tab_index, f"Interface {channel} — {desired}"
             )
+
+    def _usb_bridge_session(self, channel, mode):
+        """Return the session widget for one implemented protocol mode."""
+        sessions = {
+            UART: self.usb_bridge_uart_sessions,
+            I2C: self.usb_bridge_i2c_sessions,
+            SPI: self.usb_bridge_spi_sessions,
+        }
+        return sessions.get(mode, {}).get(channel)
 
     def _build_i2c_tab(self):
         tab = QWidget()
@@ -1200,6 +1218,8 @@ class SerialMonitorApp(QMainWindow):
             for session in self.usb_bridge_uart_sessions.values():
                 session._collect_config()
             for session in self.usb_bridge_i2c_sessions.values():
+                session._collect_config()
+            for session in self.usb_bridge_spi_sessions.values():
                 session._collect_config()
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
@@ -3636,6 +3656,8 @@ class SerialMonitorApp(QMainWindow):
             for session in self.usb_bridge_uart_sessions.values():
                 session.shutdown_session()
             for session in self.usb_bridge_i2c_sessions.values():
+                session.shutdown_session()
+            for session in self.usb_bridge_spi_sessions.values():
                 session.shutdown_session()
         self.config.save()
         if self.worker:

@@ -16,10 +16,10 @@ aplicación ya implementa.
 | FT2232H | 2 | I²C/SPI/JTAG en A y B | A y B | A y B |
 | FT4232H/HA/HP | 4 | A y B | A, B, C y D | A, B, C y D |
 
-Actualmente existen paneles funcionales para `UART` e `I2C`. La detección ya
-registra también `SPI`, `JTAG` y `GPIO`; aparecerán como modos seleccionables
-cuando se añadan sus herramientas, sin cambiar la detección ni el administrador
-de interfaces.
+Actualmente existen paneles funcionales para `UART`, `I2C` y `SPI`. La detección
+registra también `JTAG` y `GPIO`; aparecerán como modos seleccionables cuando se
+añadan sus herramientas, sin cambiar la detección ni el administrador de
+interfaces.
 
 Un PID desconocido no recibe capacidades por aproximación: permanece en
 `USB Serial / General`. Esto evita ofrecer I²C o JTAG a hardware que quizá no
@@ -34,7 +34,7 @@ no anuncia I²C.
 1. Conecta el adaptador. La lista se actualiza automáticamente; `Refresh
    adapters` permite solicitar una comprobación inmediata.
 2. Revisa la línea `Detected`, que enumera capacidades por interfaz.
-3. Elige `UART` o `I2C` en cada interfaz habilitada.
+3. Elige `UART`, `I2C` o `SPI` en cada interfaz habilitada.
 4. Trabaja en las pestañas `Interface A`, `B`, etc. Las interfaces distintas
    conservan workers y configuración independientes.
 
@@ -68,5 +68,4 @@ publicidad de una marca.
 En Linux, PyFtdi necesita acceso al dispositivo USB y UART necesita permiso para
 `/dev/ttyUSB*`. En Windows, VCP y libusb deben asignarse con cuidado por
 interfaz; instalar libusb sobre todo el dispositivo compuesto puede desactivar
-los puertos COM. Consulta las instrucciones de instalación antes de cambiar un
-driver.
+los puertos COM. Consulta [`WINDOWS.md`](WINDOWS.md) antes de cambiar un driver.

@@ -25,6 +25,14 @@
   CTS/DSR/DCD/RI para General y cada interfaz del USB Bridge.
 - Agregada prueba TX→RX loopback con tramas binarias deterministas, CRC-32,
   timeouts, bytes inesperados y recepción independiente de EOL.
+- Agregado laboratorio SPI master por interfaz MPSSE con reloj editable, modos
+  0–3, hasta cinco `/CS`, Write, Read, Write→Read y full-duplex.
+- Agregadas vista previa MOSI, respuesta HEX/ASCII, historial CSV/JSON, prueba
+  de loopback MOSI→MISO e identificación JEDEC `0x9F`.
+- El paquete Windows incluye una DLL libusb portable, autoprueba del ejecutable,
+  guía de drivers FTDI y un script reproducible de preparación completa.
+- Cada push a `main` ejecuta pruebas y genera artefactos nativos Windows/Linux;
+  las publicaciones por tag incluyen también el paquete Windows ZIP.
 
 ## v2.0.1 (2026-03-01) - Corrección HEX y release actualizado
 

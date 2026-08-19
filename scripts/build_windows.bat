@@ -25,13 +25,30 @@ if not exist "%PYTHON_BIN%" (
   --onefile ^
   --windowed ^
   --name SerialMonitor ^
+  --collect-all libusb_package ^
   --icon "%ROOT_DIR%\assets\serial.ico" ^
   "%ROOT_DIR%\main.py"
+
+if errorlevel 1 (
+  echo PyInstaller no pudo crear SerialMonitor.exe.
+  popd
+  exit /b 1
+)
+
+"%ROOT_DIR%\dist\SerialMonitor.exe" --self-test "%ROOT_DIR%\dist\windows-self-test.json"
+if errorlevel 1 (
+  echo El ejecutable Windows no paso la autoprueba de dependencias.
+  if exist "%ROOT_DIR%\dist\windows-self-test.json" type "%ROOT_DIR%\dist\windows-self-test.json"
+  popd
+  exit /b 1
+)
 
 if not exist "%ROOT_DIR%\dist\windows" mkdir "%ROOT_DIR%\dist\windows"
 copy /Y "%ROOT_DIR%\dist\SerialMonitor.exe" "%ROOT_DIR%\dist\windows\SerialMonitor.exe" >nul
 copy /Y "%ROOT_DIR%\config.example.json" "%ROOT_DIR%\dist\windows\config.json" >nul
 copy /Y "%ROOT_DIR%\assets\serial.ico" "%ROOT_DIR%\dist\windows\serial.ico" >nul
+copy /Y "%ROOT_DIR%\docs\WINDOWS.md" "%ROOT_DIR%\dist\windows\LEEME-WINDOWS.md" >nul
+copy /Y "%ROOT_DIR%\dist\windows-self-test.json" "%ROOT_DIR%\dist\windows\runtime-self-test.json" >nul
 
 echo Build Windows listo en: %ROOT_DIR%\dist\windows
 popd
