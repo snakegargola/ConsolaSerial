@@ -44,6 +44,22 @@ El procedimiento de cableado y las precauciones de nivel eléctrico están en
 
 ---
 
+## 🔁 Laboratorio SPI master
+
+- Selección independiente de SPI en cada interfaz MPSSE disponible.
+- Reloj editable de 1 kHz a 30 MHz y modos SPI 0, 1, 2 y 3.
+- De una a cinco señales `/CS`, seleccionables por transacción.
+- Operaciones Write, Read con byte dummy, Write→Read manteniendo `/CS` y
+  transferencia full-duplex.
+- Vista previa exacta de los bytes MOSI, respuesta HEX/ASCII e historial
+  exportable a CSV o JSON.
+- Loopback MOSI→MISO con resultado PASS/FAIL y lectura rápida de JEDEC ID
+  mediante comando `0x9F`.
+
+Cableado, precauciones y límites en [`docs/SPI.md`](docs/SPI.md).
+
+---
+
 ## 🔔 3. Alertas/Notificaciones - INTERFAZ AMIGABLE
 
 **Ubicación**: Botón "Manage Alerts" en el monitor

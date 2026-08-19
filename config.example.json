@@ -35,6 +35,16 @@
   "i2c_frequency": 100000,
   "i2c_clock_stretching": false,
   "i2c_retry_count": 3,
+  "spi_frequency": 1000000,
+  "spi_mode": 0,
+  "spi_cs_count": 1,
+  "spi_chip_select": 0,
+  "spi_dummy_byte": "00",
+  "spi_turbo": false,
+  "spi_operation": "write_read",
+  "spi_tx": "9F",
+  "spi_rx_length": 3,
+  "spi_loopback_pattern": "00 FF AA 55 12 34 56 78",
   "alerts": [
     {
       "pattern": "ERROR",

@@ -24,13 +24,24 @@ fi
   --onefile \
   --windowed \
   --name SerialMonitor \
+  --collect-all libusb_package \
   --icon "$ROOT_DIR/assets/serial.png" \
   "$ROOT_DIR/main.py"
+
+SELF_TEST_REPORT="$ROOT_DIR/dist/linux-self-test.json"
+if ! "$ROOT_DIR/dist/SerialMonitor" --self-test "$SELF_TEST_REPORT"; then
+  if [[ -f "$SELF_TEST_REPORT" ]]; then
+    cat "$SELF_TEST_REPORT"
+  fi
+  echo "El ejecutable Linux no pasó la autoprueba de dependencias."
+  exit 1
+fi
 
 mkdir -p "$ROOT_DIR/dist/linux"
 cp -f "$ROOT_DIR/dist/SerialMonitor" "$ROOT_DIR/dist/linux/SerialMonitor"
 chmod +x "$ROOT_DIR/dist/linux/SerialMonitor"
 cp -f "$ROOT_DIR/config.example.json" "$ROOT_DIR/dist/linux/config.json"
 cp -f "$ROOT_DIR/assets/serial.png" "$ROOT_DIR/dist/linux/serial.png"
+cp -f "$SELF_TEST_REPORT" "$ROOT_DIR/dist/linux/runtime-self-test.json"
 
 echo "Build Linux listo en: $ROOT_DIR/dist/linux"

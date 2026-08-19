@@ -14,6 +14,8 @@ SerialPython/
 │   ├── serial_worker.py         # Worker thread para comunicación serial
 │   ├── serial_payload.py        # Validación y vista previa ASCII/HEX
 │   ├── usb_bridge.py            # Catálogo y detección por capacidades
+│   ├── usb_backend.py           # Selección libusb con fallback portable
+│   ├── runtime_diagnostics.py   # Autoprueba de distribuciones congeladas
 │   ├── bridge_interface_manager.py # Arbitraje genérico por interfaz
 │   ├── i2c_worker.py            # Workers FTDI/I²C sin bloquear la GUI
 │   ├── i2c_bus.py               # Ajustes, PEC y clasificación de errores
@@ -24,6 +26,9 @@ SerialPython/
 │   ├── i2c_register_map_widget.py # Editor/runner de mapas de registros
 │   ├── ft4232_channels.py       # Compatibilidad con imports anteriores
 │   ├── i2c_value_codec.py       # Conversiones puras de valores I²C
+│   ├── spi_bus.py               # Modelo y ejecución neutral de transacciones SPI
+│   ├── spi_worker.py            # Acceso PyFtdi/SPI en segundo plano
+│   ├── spi_session_panel.py     # Laboratorio SPI por interfaz MPSSE
 │   ├── display_image_converter.py # Imágenes monocromáticas SSD1306
 │   ├── config_manager.py        # Gestión de configuración (JSON)
 │   └── log_manager.py           # Gestión de logs
@@ -138,16 +143,27 @@ en memorias.
 
 Consulta [`UART.md`](UART.md) para el uso y las limitaciones del driver.
 
-### 8. Sesiones USB Bridge concurrentes
+### 8. Módulos SPI
+
+- `spi_bus.py` valida ajustes y solicitudes sin depender de Qt ni de hardware;
+  también conserva la semántica de `/CS` en cada tipo de transacción.
+- `spi_worker.py` es el único propietario de `SpiController` durante una
+  operación, reporta la frecuencia real y garantiza el cierre del controlador.
+- `spi_session_panel.py` presenta configuración, vista previa MOSI, respuesta,
+  historial y pruebas de loopback/JEDEC.
+
+Consulta [`SPI.md`](SPI.md) para el flujo de uso y los límites explícitos.
+
+### 9. Sesiones USB Bridge concurrentes
 
 La ventana principal crea un workspace con tantas sesiones como interfaces
 declare el adaptador detectado. `usb_bridge.py` separa la identificación de
 hardware de la UI y describe sus capacidades.
-`UartSessionPanel` e `I2cSessionPanel` reutilizan las herramientas existentes,
-pero mantienen señales, timers y workers propios. `UsbBridgeInterfaceManager` evita
+`UartSessionPanel`, `I2cSessionPanel` y `SpiSessionPanel` mantienen señales,
+timers, configuración y workers propios. `UsbBridgeInterfaceManager` evita
 asignaciones incompatibles dentro del mismo canal y permite que canales
-distintos trabajen en paralelo. `ScopedConfig` separa preferencias e historial
-por sesión. Consulta [`USB_BRIDGES.md`](USB_BRIDGES.md).
+distintos trabajen en paralelo. `ScopedConfig` separa preferencias por sesión.
+Consulta [`USB_BRIDGES.md`](USB_BRIDGES.md).
 
 ## Parámetros de Configuración Serial
 
