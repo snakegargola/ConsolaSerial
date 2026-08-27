@@ -87,6 +87,11 @@ class SpiSequenceWidget(QWidget):
         self.run_btn = QPushButton("Run sequence")
         self.run_btn.clicked.connect(self._run)
         actions.addWidget(self.run_btn)
+        actions.addWidget(QLabel("Timeout:"))
+        self.timeout_spin = QSpinBox(); self.timeout_spin.setRange(1, 3600); self.timeout_spin.setValue(30); self.timeout_spin.setSuffix(" s")
+        actions.addWidget(self.timeout_spin)
+        self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False)
+        actions.addWidget(self.stop_btn)
         report = QPushButton("Export report")
         report.clicked.connect(self._export_report)
         actions.addWidget(report)
@@ -108,7 +113,7 @@ class SpiSequenceWidget(QWidget):
         self.table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
         self.table.setItem(row, 1, QTableWidgetItem(step.name))
         self.table.setCellWidget(row, 2, self._make_combo(OPERATIONS, step.operation))
-        for column, value in ((3, format_spi_hex(step.tx)),
+        for column, value in ((3, step.tx_template or format_spi_hex(step.tx)),
                               (5, f"{step.dummy_byte:02X}"),
                               (8, format_spi_hex(step.expected)),
                               (9, format_spi_hex(step.mask)), (10, "")):
@@ -124,13 +129,16 @@ class SpiSequenceWidget(QWidget):
         for row in range(self.table.rowCount()):
             text = lambda column: (self.table.item(row, column).text()
                                    if self.table.item(row, column) else "")
+            tx_text = text(3)
+            is_template = "{" in tx_text
             steps.append(SpiSequenceStep(
                 text(1), self.table.cellWidget(row, 2).currentText(),
-                parse_spi_hex(text(3)), self.table.cellWidget(row, 4).value(),
+                b"" if is_template else parse_spi_hex(tx_text), self.table.cellWidget(row, 4).value(),
                 parse_spi_hex(text(5), allow_empty=False)[0],
                 self.table.cellWidget(row, 6).value(),
                 self.table.cellWidget(row, 7).currentText(),
                 parse_spi_hex(text(8)), parse_spi_hex(text(9)),
+                tx_template=tx_text if is_template else "",
             ))
         if not steps:
             raise ValueError("Add at least one sequence step.")
@@ -199,6 +207,7 @@ class SpiSequenceWidget(QWidget):
 
     def set_busy(self, busy):
         self.run_btn.setEnabled(not busy)
+        self.stop_btn.setEnabled(busy)
 
     def show_result(self, result):
         self._last_result = result

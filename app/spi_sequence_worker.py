@@ -10,12 +10,17 @@ from .spi_bus import classify_spi_error, execute_spi_transaction
 
 
 class SpiSequenceWorker(threading.Thread):
-    def __init__(self, url, settings, steps, on_done):
+    def __init__(self, url, settings, steps, on_done, timeout_seconds=30.0):
         super().__init__(daemon=True)
         self.url = str(url)
         self.settings = settings
         self.steps = tuple(steps)
         self.on_done = on_done
+        self.timeout_seconds = float(timeout_seconds)
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
 
     def run(self):
         started = time.perf_counter()
@@ -34,19 +39,28 @@ class SpiSequenceWorker(threading.Thread):
             port = controller.get_port(self.settings.chip_select,
                                        freq=self.settings.frequency,
                                        mode=self.settings.mode)
+            last_rx = b""
             for index, step in enumerate(self.steps):
+                if self._stop_event.is_set():
+                    result["status"] = "STOPPED"; break
+                if time.perf_counter() - started > self.timeout_seconds:
+                    result["status"] = "TIMEOUT"; result["error"] = "Sequence timeout expired."; break
                 step_started = time.perf_counter()
                 if step.operation == "delay":
-                    time.sleep(step.delay_ms / 1000.0)
+                    if self._stop_event.wait(step.delay_ms / 1000.0):
+                        result["status"] = "STOPPED"; break
                     received = b""
                 else:
-                    received = execute_spi_transaction(port, step.transaction())
+                    transaction = step.transaction({"counter": index, "last_rx": last_rx})
+                    received = execute_spi_transaction(port, transaction)
                     if step.delay_ms:
-                        time.sleep(step.delay_ms / 1000.0)
+                        if self._stop_event.wait(step.delay_ms / 1000.0):
+                            result["status"] = "STOPPED"; break
                 passed, details = step.validate_rx(received)
+                last_rx = received
                 result["steps"].append({
                     "index": index, "name": step.name, "operation": step.operation,
-                    "tx": step.tx, "rx": received,
+                    "tx": b"" if step.operation == "delay" else transaction.tx, "rx": received,
                     "status": "PASS" if passed else "FAIL", "details": details,
                     "duration_ms": (time.perf_counter() - step_started) * 1000.0,
                 })

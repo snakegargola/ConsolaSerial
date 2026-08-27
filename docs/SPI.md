@@ -86,6 +86,17 @@ reales y el valor convertido, reutilizando el mismo codec probado por I²C.
 Los perfiles `.spireg.json` guardan el framing y la conversión. El polling
 mantiene muestras con mínimo, máximo y promedio y permite exportarlas a CSV.
 
+`Register map` mantiene una tabla completa de registros con nombre, dirección,
+acceso, endian, signo, escala, offset y unidad. Puede leer una fila o todas con
+una sola apertura del controlador, hacer polling, exportar muestras CSV y guardar
+el mapa como `.spimap.json`. El mapa activo se conserva por interfaz.
+
+Las secuencias aceptan variables HEX seguras en TX: `{counter}` inserta el
+contador de paso, `{random}` un byte aleatorio, `{timestamp}` cuatro bytes big
+endian y `{last_rx}` la respuesta del paso anterior. También disponen de timeout
+global y botón `Stop`; una espera larga se interrumpe inmediatamente y una
+transferencia USB activa termina antes de detenerse.
+
 ## Memorias SPI
 
 `Memory` soporta geometrías editables para SPI NOR, EEPROM 25xx y FRAM. Incluye:

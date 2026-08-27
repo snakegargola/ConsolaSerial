@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import random
+import time
+import re
 
 from .spi_bus import SpiTransaction, format_spi_hex, parse_spi_hex
 
@@ -27,6 +30,7 @@ class SpiSequenceStep:
     validation: str = "none"
     expected: bytes = b""
     mask: bytes = b""
+    tx_template: str = ""
 
     def __post_init__(self):
         operation = str(self.operation).lower()
@@ -44,7 +48,8 @@ class SpiSequenceStep:
             if self.tx or self.read_length:
                 raise ValueError("A Delay step cannot transfer bytes.")
         else:
-            SpiTransaction(operation, self.tx, self.read_length, self.dummy_byte)
+            SpiTransaction(operation, self._expanded_tx({"counter": 0, "last_rx": b""}),
+                           self.read_length, self.dummy_byte)
         expected = bytes(self.expected)
         mask = bytes(self.mask)
         if validation in ("equals", "masked_equals") and not expected:
@@ -61,11 +66,26 @@ class SpiSequenceStep:
         object.__setattr__(self, "expected", expected)
         object.__setattr__(self, "mask", mask)
 
-    def transaction(self):
+    def _expanded_tx(self, context):
+        if not self.tx_template:
+            return bytes(self.tx)
+        replacements = {
+            "counter": f"{int(context.get('counter', 0)) & 0xFF:02X}",
+            "random": f"{random.randrange(256):02X}",
+            "timestamp": int(time.time()).to_bytes(4, "big").hex(" "),
+            "last_rx": bytes(context.get("last_rx", b"")).hex(" "),
+        }
+        text = self.tx_template
+        unknown = set(re.findall(r"\{([^{}]+)\}", text)) - set(replacements)
+        if unknown: raise ValueError(f"Unknown SPI variable: {sorted(unknown)[0]}")
+        for name, value in replacements.items(): text = text.replace("{" + name + "}", value)
+        return parse_spi_hex(text)
+
+    def transaction(self, context=None):
         if self.operation == "delay":
             return None
         return SpiTransaction(
-            self.operation, self.tx, self.read_length, self.dummy_byte
+            self.operation, self._expanded_tx(context or {}), self.read_length, self.dummy_byte
         )
 
     def validate_rx(self, received):
@@ -94,7 +114,8 @@ class SpiSequenceStep:
     def to_dict(self):
         return {
             "name": self.name, "operation": self.operation,
-            "tx": format_spi_hex(self.tx), "read_length": self.read_length,
+            "tx": self.tx_template or format_spi_hex(self.tx), "read_length": self.read_length,
+            "tx_template": bool(self.tx_template),
             "dummy_byte": f"{self.dummy_byte:02X}", "delay_ms": self.delay_ms,
             "validation": self.validation,
             "expected": format_spi_hex(self.expected), "mask": format_spi_hex(self.mask),
@@ -105,7 +126,7 @@ class SpiSequenceStep:
         return cls(
             name=str(value.get("name", "Step")),
             operation=value.get("operation", "write"),
-            tx=parse_spi_hex(value.get("tx", "")),
+            tx=b"" if value.get("tx_template") else parse_spi_hex(value.get("tx", "")),
             read_length=int(value.get("read_length", 0)),
             dummy_byte=parse_spi_hex(
                 value.get("dummy_byte", "00"), allow_empty=False
@@ -114,6 +135,7 @@ class SpiSequenceStep:
             validation=value.get("validation", "none"),
             expected=parse_spi_hex(value.get("expected", "")),
             mask=parse_spi_hex(value.get("mask", "")),
+            tx_template=str(value.get("tx", "")) if value.get("tx_template") else "",
         )
 
 

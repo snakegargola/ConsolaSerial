@@ -43,6 +43,8 @@ from .spi_sequence_worker import SpiSequenceWorker
 from .spi_memory_widget import SpiMemoryWidget
 from .spi_memory_worker import SpiMemoryWorker
 from .spi_register_widget import SpiRegisterWidget
+from .spi_register_map_widget import SpiRegisterMapWidget
+from .spi_register_map_worker import SpiRegisterMapWorker
 
 
 OPERATION_LABELS = {
@@ -61,6 +63,7 @@ class SpiSessionPanel(QWidget):
     transaction_finished = pyqtSignal(object)
     sequence_finished = pyqtSignal(object)
     memory_finished = pyqtSignal(object)
+    register_map_finished = pyqtSignal(object)
 
     def __init__(self, interface, bridge, config, channel_manager, parent=None):
         super().__init__(parent)
@@ -76,6 +79,7 @@ class SpiSessionPanel(QWidget):
         self.transaction_finished.connect(self._transaction_done)
         self.sequence_finished.connect(self._sequence_done)
         self.memory_finished.connect(self._memory_done)
+        self.register_map_finished.connect(self._register_map_done)
         self._build_ui()
         self._load_config()
         self._update_operation_ui()
@@ -90,11 +94,16 @@ class SpiSessionPanel(QWidget):
         self.tabs.addTab(self._build_quick_tests_tab(), "Quick tests")
         self.sequence_widget = SpiSequenceWidget()
         self.sequence_widget.run_requested.connect(self._run_sequence)
+        self.sequence_widget.stop_btn.clicked.connect(self._stop_sequence)
         self.tabs.addTab(self.sequence_widget, "Command sequences")
         self.register_widget = SpiRegisterWidget()
         self.register_widget.transaction_requested.connect(self._run_register_transaction)
         self._register_context = None
         self.tabs.addTab(self.register_widget, "Register inspector")
+        self.register_map_widget = SpiRegisterMapWidget()
+        self.register_map_widget.read_requested.connect(self._run_register_map)
+        self._register_map_profile = None
+        self.tabs.addTab(self.register_map_widget, "Register map")
         self.memory_widget = SpiMemoryWidget()
         self.memory_widget.operation_requested.connect(self._run_memory_operation)
         self.tabs.addTab(self.memory_widget, "Memory")
@@ -311,6 +320,7 @@ class SpiSessionPanel(QWidget):
         self._shutting_down = True
         if hasattr(self, "register_widget"):
             self.register_widget.stop_polling()
+            self.register_map_widget.stop_polling()
         if not self.is_session_active():
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -422,9 +432,15 @@ class SpiSessionPanel(QWidget):
         self.sequence_widget.set_busy(True)
         url = f"{self.bound_bridge.base_url}/{self.session_interface}"
         self._worker = SpiSequenceWorker(
-            url, settings, steps, self.sequence_finished.emit
+            url, settings, steps, self.sequence_finished.emit,
+            timeout_seconds=self.sequence_widget.timeout_spin.value()
         )
         self._worker.start()
+
+    def _stop_sequence(self):
+        if isinstance(self._worker, SpiSequenceWorker):
+            self._worker.stop()
+            self.sequence_widget.status.setText("Stopping after the active transfer…")
 
     def _sequence_done(self, result):
         self._worker = None
@@ -455,6 +471,26 @@ class SpiSessionPanel(QWidget):
         self._set_busy(False); self.sequence_widget.set_busy(False); self.memory_widget.set_busy(False)
         self.memory_widget.show_result(result)
         self.status_label.setText(self.memory_widget.status.text())
+        if self._shutting_down:
+            self.channel_manager.release(self.session_channel, self._channel_owner)
+
+    def _run_register_map(self, profile, indexes):
+        if self.is_session_active(): return
+        try:
+            settings, _dummy = self._settings()
+            self.channel_manager.acquire(self.session_channel, "SPI", self._channel_owner)
+        except (ValueError, InterfaceBusyError) as exc:
+            self.register_map_widget.status.setText(f"ERROR: {exc}"); return
+        self._register_map_profile = profile; self._set_busy(True)
+        url = f"{self.bound_bridge.base_url}/{self.session_interface}"
+        self._worker = SpiRegisterMapWorker(url, settings, profile, indexes,
+                                            self.register_map_finished.emit)
+        self._worker.start()
+
+    def _register_map_done(self, result):
+        self._worker = None; self._set_busy(False)
+        self.register_map_widget.show_result(result, self._register_map_profile)
+        self.status_label.setText(self.register_map_widget.status.text())
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -610,7 +646,9 @@ class SpiSessionPanel(QWidget):
         )))
         self.register_widget.apply_settings(self.config.get("spi_register", {}))
         self.memory_widget.apply_settings(self.config.get("spi_memory", {}))
+        self.register_map_widget.apply_settings(self.config.get("spi_register_map", {}))
         self.sequence_widget.repeat_spin.setValue(int(self.config.get("spi_sequence_repeat", 1)))
+        self.sequence_widget.timeout_spin.setValue(int(self.config.get("spi_sequence_timeout", 30)))
 
     def _collect_config(self):
         try:
@@ -629,4 +667,6 @@ class SpiSessionPanel(QWidget):
         self.config.set("spi_loopback_pattern", self.loopback_edit.text())
         self.config.set("spi_register", self.register_widget.settings_dict())
         self.config.set("spi_memory", self.memory_widget.settings_dict())
+        self.config.set("spi_register_map", self.register_map_widget.settings_dict())
         self.config.set("spi_sequence_repeat", self.sequence_widget.repeat_spin.value())
+        self.config.set("spi_sequence_timeout", self.sequence_widget.timeout_spin.value())

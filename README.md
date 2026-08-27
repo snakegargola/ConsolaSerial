@@ -42,6 +42,8 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
   BIN y reportes reproducibles de secuencias SPI.
 - Diagnóstico de protección, edición HEX segura y selección de geometría/opcodes
   desde datos JEDEC/SFDP para memorias SPI.
+- Mapas de múltiples registros SPI con polling/CSV y secuencias cancelables con
+  timeout y variables dinámicas seguras.
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
   máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y
