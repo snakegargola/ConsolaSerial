@@ -103,6 +103,9 @@ MOSI con MISO y desconectar primero el dispositivo objetivo.
 Durante la ejecución aparece un indicador grande `RUNNING`; al terminar muestra
 el estado global y los conteos `PASS/FAIL`. SPI no mantiene una conexión como
 UART: cada operación abre la interfaz FTDI, transfiere y la cierra.
+Cada ejecución borra primero resultados/reportes anteriores, incrementa `RUN #`
+y purga los buffers USB/MPSSE antes de transmitir. Así una validación nunca puede
+aprobarse usando bytes pendientes de una corrida anterior.
 
 ## Memorias SPI
 

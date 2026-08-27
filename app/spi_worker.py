@@ -43,6 +43,9 @@ class SpiTransactionWorker(threading.Thread):
                 cs_count=self.settings.cs_count,
                 turbo=self.settings.turbo,
             )
+            ftdi = getattr(controller, "ftdi", None)
+            if ftdi is not None:
+                ftdi.purge_buffers()
             port = controller.get_port(
                 self.settings.chip_select,
                 freq=self.settings.frequency,

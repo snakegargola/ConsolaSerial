@@ -26,7 +26,7 @@ class SpiSequenceWidget(QWidget):
     run_requested = pyqtSignal(object)
 
     def __init__(self, parent=None):
-        super().__init__(parent); self._last_result = None
+        super().__init__(parent); self._last_result = None; self._run_number = 0
         self._profiles = builtin_spi_profiles()
         self._build_ui()
         self._load_profile(self._profiles[0])
@@ -195,19 +195,19 @@ class SpiSequenceWidget(QWidget):
             self.table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
 
     def _run(self):
+        self._clear_previous_result()
         try:
             steps = self._rows()
         except ValueError as exc:
             self.status.setText(f"INVALID: {exc}")
             return
-        for row in range(self.table.rowCount()):
-            self.table.item(row, 10).setText("")
         total = len(steps) * self.repeat_spin.value()
-        self._set_banner(f"RUNNING — 0/{total} completed", "#B7791F")
+        self._set_banner(f"RUN #{self._run_number} RUNNING — 0/{total} completed", "#B7791F")
         self.status.setText("SPI opens the FTDI interface for this operation and closes it when finished.")
         self.run_requested.emit(steps * self.repeat_spin.value())
 
     def _run_selected(self):
+        self._clear_previous_result()
         try:
             row = self.table.currentRow()
             if row < 0: raise ValueError("Select a step first.")
@@ -215,8 +215,18 @@ class SpiSequenceWidget(QWidget):
         except ValueError as exc:
             self.status.setText(f"INVALID: {exc}"); return
         total = self.repeat_spin.value()
-        self._set_banner(f"RUNNING — 0/{total} completed", "#B7791F")
+        self._set_banner(f"RUN #{self._run_number} RUNNING — 0/{total} completed", "#B7791F")
         self.run_requested.emit((step,) * total)
+
+    def _clear_previous_result(self):
+        self._run_number += 1
+        self._last_result = None
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 10)
+            if item is not None:
+                item.setText("")
+        self._set_banner(f"RUN #{self._run_number} — clearing previous RX/result…", "#3A7CA5")
+        self.status.setText("Previous result and report cleared.")
 
     def set_busy(self, busy):
         self.run_btn.setEnabled(not busy)
@@ -237,7 +247,7 @@ class SpiSequenceWidget(QWidget):
         color = "#238636" if successful else "#C62828"
         if status == "STOPPED": color = "#6B7280"
         outcome = "PASS — TEST COMPLETED CORRECTLY" if successful else status
-        self._set_banner(f"{outcome} — completed {completed}, PASS {passed}, FAIL {failed}", color)
+        self._set_banner(f"RUN #{self._run_number} {outcome} — completed {completed}, PASS {passed}, FAIL {failed}", color)
         if self.table.rowCount():
             self.table.scrollToItem(self.table.item(0, 10), QAbstractItemView.ScrollHint.PositionAtCenter)
         self.status.setText(
