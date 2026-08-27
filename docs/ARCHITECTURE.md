@@ -37,6 +37,9 @@ SerialPython/
 │   ├── spi_memory_widget.py     # Visor HEX/BIN y controles protegidos
 │   ├── spi_register_widget.py   # Inspector genérico de registros SPI
 │   ├── spi_register_profile.py  # Esquema versionado de perfiles de registros
+│   ├── spi_register_map.py      # Modelo versionado para tablas de registros
+│   ├── spi_register_map_worker.py # Lectura batch en segundo plano
+│   ├── spi_register_map_widget.py # Editor, polling y exportación CSV
 │   ├── display_image_converter.py # Imágenes monocromáticas SSD1306
 │   ├── config_manager.py        # Gestión de configuración (JSON)
 │   └── log_manager.py           # Gestión de logs

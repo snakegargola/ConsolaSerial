@@ -39,6 +39,16 @@ class SpiSequenceTests(unittest.TestCase):
         self.assertFalse(any(step.tx[:1] in dangerous for profile in profiles
                              for step in profile.steps))
 
+    def test_templates_expand_safe_variables_and_round_trip(self):
+        step = SpiSequenceStep("Dynamic", "write", tx_template="AA {counter} {last_rx}")
+        self.assertEqual(step.transaction({"counter": 258, "last_rx": b"\x10\x20"}).tx,
+                         b"\xaa\x02\x10\x20")
+        profile = SpiDeviceProfile("Dynamic profile", steps=(step,))
+        loaded = SpiDeviceProfile.from_json(profile.to_json())
+        self.assertEqual(loaded.steps[0].tx_template, step.tx_template)
+        with self.assertRaises(ValueError):
+            SpiSequenceStep("Unsafe", "write", tx_template="{unknown}")
+
 
 if __name__ == "__main__":
     unittest.main()
