@@ -16,7 +16,7 @@ from .spi_bus import format_spi_hex, parse_spi_hex
 from .spi_sequence import SpiDeviceProfile, SpiSequenceStep, builtin_spi_profiles
 
 
-OPERATIONS = ("write", "read", "write_read", "duplex", "delay")
+OPERATIONS = ("write", "read", "write_read", "duplex", "loopback", "delay")
 VALIDATIONS = ("none", "equals", "masked_equals", "not_all_00_ff")
 
 

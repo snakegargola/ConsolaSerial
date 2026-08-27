@@ -89,13 +89,17 @@ mantiene muestras con mínimo, máximo y promedio y permite exportarlas a CSV.
 `Register map` mantiene una tabla completa de registros con nombre, dirección,
 acceso, endian, signo, escala, offset y unidad. Puede leer una fila o todas con
 una sola apertura del controlador, hacer polling, exportar muestras CSV y guardar
-el mapa como `.spimap.json`. El mapa activo se conserva por interfaz.
+el mapa como `.spimap.json`. `Write selected` valida el tamaño, respeta el opcode
+de escritura y exige confirmación. El mapa activo se conserva por interfaz.
 
 Las secuencias aceptan variables HEX seguras en TX: `{counter}` inserta el
 contador de paso, `{random}` un byte aleatorio, `{timestamp}` cuatro bytes big
 endian y `{last_rx}` la respuesta del paso anterior. También disponen de timeout
 global y botón `Stop`; una espera larga se interrumpe inmediatamente y una
 transferencia USB activa termina antes de detenerse.
+El preset `SPI link stability loopback` combina validación exacta, repetición,
+timeout y reporte para medir estabilidad de forma no destructiva; requiere unir
+MOSI con MISO y desconectar primero el dispositivo objetivo.
 
 ## Memorias SPI
 
@@ -125,6 +129,9 @@ la memoria ocupada. La identificación y lectura son el flujo inicial recomendad
 Para memorias mayores de 16 MiB debe seleccionarse el ancho y los opcodes de tres
 o cuatro bytes que indique SFDP/datasheet; algunos chips usan modo 4-byte y otros
 comandos dedicados como `13h`, `12h` y `21h`.
+`Address strategy` permite dejar los opcodes nativos, entrar temporalmente con
+`B7h` y restaurar con `E9h` incluso después de un error, o usar automáticamente
+los opcodes dedicados `13h/12h/21h`.
 
 Los ajustes del inspector, memoria y repetición de secuencias se conservan por
 adaptador e interfaz mediante la configuración del workspace USB Bridge.
