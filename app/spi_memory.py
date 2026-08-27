@@ -1,0 +1,103 @@
+"""Pure helpers for common SPI NOR, 25xx EEPROM, and FRAM devices."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+MEMORY_KINDS = ("SPI NOR", "25xx EEPROM", "SPI FRAM")
+
+
+@dataclass(frozen=True)
+class SpiMemoryGeometry:
+    kind: str = "SPI NOR"
+    capacity: int = 1 << 20
+    address_bytes: int = 3
+    page_size: int = 256
+    sector_size: int = 4096
+    read_command: int = 0x03
+    program_command: int = 0x02
+    write_enable_command: int = 0x06
+    status_command: int = 0x05
+    erase_command: int = 0x20
+    busy_mask: int = 0x01
+    write_delay_ms: int = 5
+
+    def __post_init__(self):
+        if self.kind not in MEMORY_KINDS:
+            raise ValueError("Unsupported SPI memory kind.")
+        if not 1 <= int(self.capacity) <= (1 << 32):
+            raise ValueError("Capacity must be from 1 byte to 4 GiB.")
+        if not 1 <= int(self.address_bytes) <= 4:
+            raise ValueError("Address width must be from 1 to 4 bytes.")
+        if not 1 <= int(self.page_size) <= 65536:
+            raise ValueError("Page size must be from 1 to 65536 bytes.")
+        if not 1 <= int(self.sector_size) <= int(self.capacity):
+            raise ValueError("Sector size must fit in the memory capacity.")
+        for name in ("read_command", "program_command", "write_enable_command",
+                     "status_command", "erase_command", "busy_mask"):
+            if not 0 <= int(getattr(self, name)) <= 0xFF:
+                raise ValueError(f"{name} must be one byte.")
+
+    def address(self, value):
+        value = int(value)
+        if not 0 <= value < self.capacity:
+            raise ValueError("Memory address is outside the configured capacity.")
+        if value >= 1 << (8 * self.address_bytes):
+            raise ValueError("Address does not fit the configured address width.")
+        return value.to_bytes(self.address_bytes, "big")
+
+
+def validate_memory_range(geometry, address, length):
+    address, length = int(address), int(length)
+    if length < 0 or address < 0 or address + length > geometry.capacity:
+        raise ValueError("Memory range is outside the configured capacity.")
+    return address, length
+
+
+def iter_page_programs(geometry, address, payload):
+    """Split writes without ever crossing a physical page boundary."""
+    payload = bytes(payload)
+    validate_memory_range(geometry, address, len(payload))
+    offset = 0
+    while offset < len(payload):
+        current = address + offset
+        available = geometry.page_size - (current % geometry.page_size)
+        chunk = payload[offset:offset + available]
+        yield current, chunk
+        offset += len(chunk)
+
+
+def parse_jedec_id(payload):
+    payload = bytes(payload)
+    if len(payload) < 3:
+        raise ValueError("JEDEC ID requires at least three bytes.")
+    manufacturers = {0x01: "Cypress/Spansion", 0x20: "Micron/ST",
+                     0x1F: "Adesto/Atmel", 0xBF: "Microchip/SST",
+                     0xC2: "Macronix", 0xEF: "Winbond"}
+    capacity_code = payload[2]
+    capacity = (1 << capacity_code) if 8 <= capacity_code <= 32 else None
+    return {"manufacturer_id": payload[0],
+            "manufacturer": manufacturers.get(payload[0], "Unknown"),
+            "memory_type": payload[1], "capacity_code": capacity_code,
+            "capacity": capacity}
+
+
+def parse_sfdp_header(payload):
+    payload = bytes(payload)
+    if len(payload) < 8 or payload[:4] != b"SFDP":
+        raise ValueError("Invalid or missing SFDP signature.")
+    return {"minor": payload[4], "major": payload[5],
+            "parameter_headers": payload[6] + 1,
+            "access_protocol": payload[7]}
+
+
+def format_hex_dump(payload, base_address=0, width=16):
+    lines = []
+    payload = bytes(payload)
+    for offset in range(0, len(payload), width):
+        chunk = payload[offset:offset + width]
+        hex_part = " ".join(f"{value:02X}" for value in chunk)
+        ascii_part = "".join(chr(value) if 32 <= value < 127 else "." for value in chunk)
+        lines.append(f"{base_address + offset:08X}  {hex_part:<{width * 3 - 1}}  |{ascii_part}|")
+    return "\n".join(lines)

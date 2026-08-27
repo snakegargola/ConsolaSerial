@@ -75,6 +75,12 @@ class SpiSequenceWidget(QWidget):
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch()
+        actions.addWidget(QLabel("Repeat:"))
+        self.repeat_spin = QSpinBox(); self.repeat_spin.setRange(1, 1000)
+        actions.addWidget(self.repeat_spin)
+        selected = QPushButton("Run selected")
+        selected.clicked.connect(self._run_selected)
+        actions.addWidget(selected)
         self.run_btn = QPushButton("Run sequence")
         self.run_btn.clicked.connect(self._run)
         actions.addWidget(self.run_btn)
@@ -174,7 +180,16 @@ class SpiSequenceWidget(QWidget):
             return
         for row in range(self.table.rowCount()):
             self.table.item(row, 10).setText("")
-        self.run_requested.emit(steps)
+        self.run_requested.emit(steps * self.repeat_spin.value())
+
+    def _run_selected(self):
+        try:
+            row = self.table.currentRow()
+            if row < 0: raise ValueError("Select a step first.")
+            step = self._rows()[row]
+        except ValueError as exc:
+            self.status.setText(f"INVALID: {exc}"); return
+        self.run_requested.emit((step,) * self.repeat_spin.value())
 
     def set_busy(self, busy):
         self.run_btn.setEnabled(not busy)
