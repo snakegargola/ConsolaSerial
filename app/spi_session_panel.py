@@ -40,6 +40,9 @@ from .spi_bus import (
 from .spi_worker import SpiTransactionWorker
 from .spi_sequence_widget import SpiSequenceWidget
 from .spi_sequence_worker import SpiSequenceWorker
+from .spi_memory_widget import SpiMemoryWidget
+from .spi_memory_worker import SpiMemoryWorker
+from .spi_register_widget import SpiRegisterWidget
 
 
 OPERATION_LABELS = {
@@ -57,6 +60,7 @@ class SpiSessionPanel(QWidget):
 
     transaction_finished = pyqtSignal(object)
     sequence_finished = pyqtSignal(object)
+    memory_finished = pyqtSignal(object)
 
     def __init__(self, interface, bridge, config, channel_manager, parent=None):
         super().__init__(parent)
@@ -71,6 +75,7 @@ class SpiSessionPanel(QWidget):
         self._shutting_down = False
         self.transaction_finished.connect(self._transaction_done)
         self.sequence_finished.connect(self._sequence_done)
+        self.memory_finished.connect(self._memory_done)
         self._build_ui()
         self._load_config()
         self._update_operation_ui()
@@ -86,6 +91,13 @@ class SpiSessionPanel(QWidget):
         self.sequence_widget = SpiSequenceWidget()
         self.sequence_widget.run_requested.connect(self._run_sequence)
         self.tabs.addTab(self.sequence_widget, "Command sequences")
+        self.register_widget = SpiRegisterWidget()
+        self.register_widget.transaction_requested.connect(self._run_register_transaction)
+        self._register_context = None
+        self.tabs.addTab(self.register_widget, "Register inspector")
+        self.memory_widget = SpiMemoryWidget()
+        self.memory_widget.operation_requested.connect(self._run_memory_operation)
+        self.tabs.addTab(self.memory_widget, "Memory")
         self.tabs.addTab(self._build_history_tab(), "History")
         root.addWidget(self.tabs, stretch=1)
 
@@ -421,6 +433,29 @@ class SpiSessionPanel(QWidget):
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
+    def _run_memory_operation(self, action, geometry, request):
+        if self.is_session_active():
+            return
+        try:
+            settings, _dummy = self._settings()
+            self.channel_manager.acquire(self.session_channel, "SPI", self._channel_owner)
+        except (ValueError, InterfaceBusyError) as exc:
+            self.memory_widget.status.setText(f"ERROR: {exc}")
+            return
+        self._set_busy(True); self.sequence_widget.set_busy(True); self.memory_widget.set_busy(True)
+        url = f"{self.bound_bridge.base_url}/{self.session_interface}"
+        self._worker = SpiMemoryWorker(url, settings, geometry, action, request,
+                                       self.memory_finished.emit)
+        self._worker.start()
+
+    def _memory_done(self, result):
+        self._worker = None
+        self._set_busy(False); self.sequence_widget.set_busy(False); self.memory_widget.set_busy(False)
+        self.memory_widget.show_result(result)
+        self.status_label.setText(self.memory_widget.status.text())
+        if self._shutting_down:
+            self.channel_manager.release(self.session_channel, self._channel_owner)
+
     def _transaction_done(self, result):
         self._worker = None
         self._set_busy(False)
@@ -442,8 +477,19 @@ class SpiSessionPanel(QWidget):
         self.status_label.setText(summary)
         if result.get("operation") in ("loopback", "jedec"):
             self.quick_result.setText(summary)
+        if self._register_context is not None:
+            context, self._register_context = self._register_context, None
+            self.register_widget.show_result(result, context)
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
+
+    def _run_register_transaction(self, transaction, context):
+        if self.is_session_active():
+            return
+        self._register_context = context
+        self._start_transaction(transaction)
+        if not self.is_session_active():
+            self._register_context = None
 
     def _append_history(self, result):
         serializable = dict(result)

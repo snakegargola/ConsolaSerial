@@ -36,6 +36,8 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 - Pruebas rápidas SPI de loopback MOSI→MISO e identificación JEDEC `0x9F`
   con perfiles JSON y secuencias editables para memorias, pantallas y comandos
   de dispositivos.
+- Inspector SPI de registros y visor/programador para NOR, EEPROM 25xx y FRAM,
+  con SFDP, paginación, polling BUSY, confirmación y verificación posterior.
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
   máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y

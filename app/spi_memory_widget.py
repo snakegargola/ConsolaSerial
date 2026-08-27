@@ -1,0 +1,121 @@
+"""SPI memory UI; all device access is delegated to the session worker."""
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
+    QComboBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTextEdit,
+    QVBoxLayout, QWidget,
+)
+
+from .spi_bus import parse_spi_hex
+from .spi_memory import SpiMemoryGeometry, format_hex_dump
+
+
+class SpiMemoryWidget(QWidget):
+    operation_requested = pyqtSignal(str, object, object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent); self._buffer = b""; self._base_address = 0
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        config = QGroupBox("Memory geometry and commands")
+        form = QFormLayout(config)
+        self.kind = QComboBox(); self.kind.addItems(("SPI NOR", "25xx EEPROM", "SPI FRAM"))
+        self.capacity = QSpinBox(); self.capacity.setRange(1, 2_147_483_647); self.capacity.setValue(1 << 20)
+        self.address_bytes = QSpinBox(); self.address_bytes.setRange(1, 4); self.address_bytes.setValue(3)
+        self.page_size = QSpinBox(); self.page_size.setRange(1, 65536); self.page_size.setValue(256)
+        self.sector_size = QSpinBox(); self.sector_size.setRange(1, 16 << 20); self.sector_size.setValue(4096)
+        self.commands = QLineEdit("03 02 06 05 20 01")
+        self.commands.setToolTip("Read, Program, Write Enable, Status, Sector Erase, Busy mask")
+        for label, widget in (("Type", self.kind), ("Capacity (bytes)", self.capacity),
+                              ("Address bytes", self.address_bytes), ("Page size", self.page_size),
+                              ("Sector size", self.sector_size), ("Commands (HEX)", self.commands)):
+            form.addRow(label, widget)
+        root.addWidget(config)
+        controls = QGridLayout()
+        self.address = QLineEdit("000000"); self.length = QSpinBox()
+        self.length.setRange(1, 65280); self.length.setValue(256)
+        controls.addWidget(QLabel("Address (HEX):"), 0, 0); controls.addWidget(self.address, 0, 1)
+        controls.addWidget(QLabel("Length:"), 0, 2); controls.addWidget(self.length, 0, 3)
+        identify = QPushButton("Identify JEDEC/SFDP"); identify.clicked.connect(lambda: self._request("identify"))
+        read = QPushButton("Read"); read.clicked.connect(lambda: self._request("read"))
+        load = QPushButton("Load BIN for program"); load.clicked.connect(self._load_bin)
+        program = QPushButton("Program + verify"); program.clicked.connect(lambda: self._request("program"))
+        erase = QPushButton("Erase sector"); erase.clicked.connect(lambda: self._request("erase_sector"))
+        save = QPushButton("Save buffer BIN"); save.clicked.connect(self._save_bin)
+        for column, button in enumerate((identify, read, load, program, erase, save)):
+            controls.addWidget(button, 1, column)
+        self._buttons = (identify, read, load, program, erase, save)
+        root.addLayout(controls)
+        self.viewer = QTextEdit(); self.viewer.setReadOnly(True); self.viewer.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        root.addWidget(self.viewer, 1)
+        self.status = QLabel("Read first. Programming and erase always require confirmation.")
+        root.addWidget(self.status)
+
+    def geometry(self):
+        command = parse_spi_hex(self.commands.text(), allow_empty=False)
+        if len(command) != 6: raise ValueError("Enter exactly six command/mask bytes.")
+        return SpiMemoryGeometry(self.kind.currentText(), self.capacity.value(),
+                                 self.address_bytes.value(), self.page_size.value(),
+                                 self.sector_size.value(), *command)
+
+    def _address(self):
+        try: return int(self.address.text().strip(), 16)
+        except ValueError as exc: raise ValueError("Address must be hexadecimal.") from exc
+
+    def _request(self, action):
+        try:
+            geometry = self.geometry(); address = self._address()
+            request = {"address": address, "length": self.length.value()}
+            if action == "program":
+                if not self._buffer: raise ValueError("Load a BIN file before programming.")
+                request["data"] = self._buffer
+                prompt = f"Program {len(self._buffer)} bytes at 0x{address:X} and verify?"
+            elif action == "erase_sector":
+                prompt = f"Erase the entire sector containing address 0x{address:X}?"
+            else: prompt = ""
+            if prompt and QMessageBox.warning(self, "Destructive SPI operation", prompt,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+                return
+            self.operation_requested.emit(action, geometry, request)
+        except ValueError as exc: self.status.setText(f"INVALID: {exc}")
+
+    def _load_bin(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load memory image", "", "Binary (*.bin);;All files (*)")
+        if path:
+            try:
+                with open(path, "rb") as stream: self._buffer = stream.read()
+                self._base_address = self._address(); self.length.setValue(min(len(self._buffer), 65280))
+                self.viewer.setPlainText(format_hex_dump(self._buffer, self._base_address))
+                self.status.setText(f"Loaded {len(self._buffer)} bytes from {path}")
+            except (OSError, ValueError) as exc: self.status.setText(f"ERROR: {exc}")
+
+    def _save_bin(self):
+        if not self._buffer: return
+        path, _ = QFileDialog.getSaveFileName(self, "Save memory image", "memory.bin", "Binary (*.bin)")
+        if path:
+            try:
+                with open(path, "wb") as stream: stream.write(self._buffer)
+            except OSError as exc: self.status.setText(f"ERROR: {exc}")
+
+    def show_result(self, result):
+        data = bytes(result.get("data", b"")); action = result.get("action")
+        if action == "identify" and result.get("jedec"):
+            item = result["jedec"]; sfdp = result.get("sfdp")
+            if item.get("capacity") and item["capacity"] <= self.capacity.maximum():
+                self.capacity.setValue(item["capacity"])
+            self.status.setText(f"{result['status']}: {item['manufacturer']} ID "
+                                f"{item['manufacturer_id']:02X} {item['memory_type']:02X} "
+                                f"{item['capacity_code']:02X}; SFDP: {'yes' if sfdp else 'no'} — "
+                                f"{result.get('details', '')}")
+        else:
+            if data:
+                self._buffer = data; self._base_address = result.get("address", self._base_address)
+                self.viewer.setPlainText(format_hex_dump(data, self._base_address))
+            self.status.setText(f"{result.get('status')}: {result.get('details') or result.get('error') or ''}")
+
+    def set_busy(self, busy):
+        for button in self._buttons: button.setEnabled(not busy)
