@@ -40,6 +40,8 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
   con SFDP, paginación, polling BUSY, confirmación y verificación posterior.
 - Polling de registros con estadísticas/CSV, perfiles versionados, comparación
   BIN y reportes reproducibles de secuencias SPI.
+- Diagnóstico de protección, edición HEX segura y selección de geometría/opcodes
+  desde datos JEDEC/SFDP para memorias SPI.
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
   máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y

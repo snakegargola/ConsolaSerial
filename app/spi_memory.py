@@ -21,6 +21,7 @@ class SpiMemoryGeometry:
     status_command: int = 0x05
     erase_command: int = 0x20
     busy_mask: int = 0x01
+    protection_mask: int = 0x3C
     write_delay_ms: int = 5
 
     def __post_init__(self):
@@ -35,7 +36,7 @@ class SpiMemoryGeometry:
         if not 1 <= int(self.sector_size) <= int(self.capacity):
             raise ValueError("Sector size must fit in the memory capacity.")
         for name in ("read_command", "program_command", "write_enable_command",
-                     "status_command", "erase_command", "busy_mask"):
+                     "status_command", "erase_command", "busy_mask", "protection_mask"):
             if not 0 <= int(getattr(self, name)) <= 0xFF:
                 raise ValueError(f"{name} must be one byte.")
 
@@ -108,6 +109,9 @@ def parse_sfdp(payload):
         headers.append(header)
         if parameter_id in (0xFF00, 0x0000) and pointer + 8 <= len(payload):
             table = payload[pointer:pointer + item[3] * 4]
+            first_word = int.from_bytes(table[:4], "little")
+            address_code = (first_word >> 17) & 0x03
+            result["address_bytes"] = {0: (3,), 1: (3, 4), 2: (4,)}.get(address_code, ())
             density_word = int.from_bytes(table[4:8], "little")
             if density_word & 0x80000000:
                 exponent = density_word & 0x7FFFFFFF
@@ -120,8 +124,27 @@ def parse_sfdp(payload):
                 page_exponent = (int.from_bytes(table[40:44], "little") >> 4) & 0x0F
                 if page_exponent:
                     result["page_size"] = 1 << page_exponent
+            erase_types = []
+            if len(table) >= 36:
+                for dword_offset in (28, 32):
+                    word = int.from_bytes(table[dword_offset:dword_offset + 4], "little")
+                    for shift in (0, 16):
+                        exponent = (word >> shift) & 0xFF
+                        opcode = (word >> (shift + 8)) & 0xFF
+                        if opcode and exponent and exponent < 32:
+                            erase_types.append({"opcode": opcode, "size": 1 << exponent})
+            result["erase_types"] = erase_types
     result["parameters"] = headers
     return result
+
+
+def decode_status_register(value, *, busy_mask=0x01, protection_mask=0x3C):
+    value = int(value)
+    if not 0 <= value <= 0xFF: raise ValueError("Status register must be one byte.")
+    return {"raw": value, "busy": bool(value & int(busy_mask)),
+            "write_enabled": bool(value & 0x02),
+            "protected": bool(value & int(protection_mask)),
+            "protection_bits": value & int(protection_mask)}
 
 
 def format_hex_dump(payload, base_address=0, width=16):

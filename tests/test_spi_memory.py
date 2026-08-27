@@ -1,7 +1,7 @@
 import unittest
 
 from app.spi_memory import (
-    SpiMemoryGeometry, format_hex_dump, iter_page_programs,
+    SpiMemoryGeometry, decode_status_register, format_hex_dump, iter_page_programs,
     parse_jedec_id, parse_sfdp, parse_sfdp_header, validate_memory_range,
 )
 
@@ -33,9 +33,18 @@ class SpiMemoryTests(unittest.TestCase):
         payload[8:16] = bytes((0x00, 0x06, 0x01, 11, 16, 0, 0, 0xFF))
         payload[20:24] = (8 * 1024 * 1024 - 1).to_bytes(4, "little")
         payload[56:60] = (8 << 4).to_bytes(4, "little")
+        payload[44:48] = (12 | (0x20 << 8) | (16 << 16) | (0xD8 << 24)).to_bytes(4, "little")
         decoded = parse_sfdp(payload)
         self.assertEqual(decoded["capacity"], 1024 * 1024)
         self.assertEqual(decoded["page_size"], 256)
+        self.assertEqual(decoded["address_bytes"], (3,))
+        self.assertIn({"opcode": 0x20, "size": 4096}, decoded["erase_types"])
+
+    def test_status_register_reports_busy_wel_and_protection(self):
+        decoded = decode_status_register(0x0F, busy_mask=0x01, protection_mask=0x0C)
+        self.assertTrue(decoded["busy"])
+        self.assertTrue(decoded["write_enabled"])
+        self.assertTrue(decoded["protected"])
 
     def test_hex_dump_has_address_and_ascii(self):
         output = format_hex_dump(b"ABC\x00", 0x20)

@@ -92,17 +92,28 @@ mantiene muestras con mínimo, máximo y promedio y permite exportarlas a CSV.
 
 - identificación JEDEC y encabezado SFDP;
 - decodificación SFDP de capacidad y tamaño de página cuando están publicados;
+- detección SFDP del ancho de dirección y tipos opcode/tamaño de borrado;
 - lectura por rango con vista HEX/ASCII y archivos BIN;
+- edición controlada del buffer en HEX antes de programar;
 - comparación de la lectura o buffer contra otro archivo BIN;
 - programación dividida sin cruzar páginas;
 - `Write Enable`, polling del registro de estado y timeout;
 - lectura posterior y verificación byte por byte;
 - borrado de sector alineado.
 
+`Read status` muestra BUSY, Write Enable Latch y los bits cubiertos por la máscara
+de protección. Antes de programar o borrar, el worker vuelve a leer el estado y
+rechaza la operación con `PROTECTED` si alguno está activo. La máscara es editable
+porque la posición y significado de BP/SRP cambia entre fabricantes; `00` desactiva
+esta comprobación y sólo debe usarse después de consultar el datasheet.
+
 Programar o borrar requiere confirmación explícita. Los comandos, ancho de
 dirección, capacidad, página, sector y máscara BUSY deben verificarse contra el
 datasheet exacto. Una geometría incorrecta puede modificar otra región o dejar
 la memoria ocupada. La identificación y lectura son el flujo inicial recomendado.
+Para memorias mayores de 16 MiB debe seleccionarse el ancho y los opcodes de tres
+o cuatro bytes que indique SFDP/datasheet; algunos chips usan modo 4-byte y otros
+comandos dedicados como `13h`, `12h` y `21h`.
 
 Los ajustes del inspector, memoria y repetición de secuencias se conservan por
 adaptador e interfaz mediante la configuración del workspace USB Bridge.
