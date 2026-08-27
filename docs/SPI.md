@@ -100,6 +100,9 @@ transferencia USB activa termina antes de detenerse.
 El preset `SPI link stability loopback` combina validación exacta, repetición,
 timeout y reporte para medir estabilidad de forma no destructiva; requiere unir
 MOSI con MISO y desconectar primero el dispositivo objetivo.
+Durante la ejecución aparece un indicador grande `RUNNING`; al terminar muestra
+el estado global y los conteos `PASS/FAIL`. SPI no mantiene una conexión como
+UART: cada operación abre la interfaz FTDI, transfiere y la cierra.
 
 ## Memorias SPI
 

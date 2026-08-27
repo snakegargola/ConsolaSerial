@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QTableWidget,
@@ -68,6 +68,7 @@ class SpiSequenceWidget(QWidget):
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
@@ -96,6 +97,11 @@ class SpiSequenceWidget(QWidget):
         report.clicked.connect(self._export_report)
         actions.addWidget(report)
         root.addLayout(actions)
+        self.result_banner = QLabel("READY — press Run sequence to start")
+        self.result_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.result_banner.setMinimumHeight(42)
+        self._set_banner("READY", "#3A7CA5")
+        root.addWidget(self.result_banner)
         self.status = QLabel("Profiles are editable. Verify commands against the datasheet.")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
@@ -194,6 +200,9 @@ class SpiSequenceWidget(QWidget):
             return
         for row in range(self.table.rowCount()):
             self.table.item(row, 10).setText("")
+        total = len(steps) * self.repeat_spin.value()
+        self._set_banner(f"RUNNING — 0/{total} completed", "#B7791F")
+        self.status.setText("SPI opens the FTDI interface for this operation and closes it when finished.")
         self.run_requested.emit(steps * self.repeat_spin.value())
 
     def _run_selected(self):
@@ -203,7 +212,9 @@ class SpiSequenceWidget(QWidget):
             step = self._rows()[row]
         except ValueError as exc:
             self.status.setText(f"INVALID: {exc}"); return
-        self.run_requested.emit((step,) * self.repeat_spin.value())
+        total = self.repeat_spin.value()
+        self._set_banner(f"RUNNING — 0/{total} completed", "#B7791F")
+        self.run_requested.emit((step,) * total)
 
     def set_busy(self, busy):
         self.run_btn.setEnabled(not busy)
@@ -216,9 +227,25 @@ class SpiSequenceWidget(QWidget):
             if row < self.table.rowCount():
                 details = item.get("details") or format_spi_hex(item.get("rx", b""))
                 self.table.item(row, 10).setText(f"{item['status']} {details}".strip())
+        completed = len(result.get("steps", []))
+        passed = sum(item.get("status") == "PASS" for item in result.get("steps", []))
+        failed = sum(item.get("status") == "FAIL" for item in result.get("steps", []))
+        status = result.get("status", "ERROR")
+        color = "#238636" if status in ("OK", "PASS") and not failed else "#C62828"
+        if status == "STOPPED": color = "#6B7280"
+        self._set_banner(f"{status} — completed {completed}, PASS {passed}, FAIL {failed}", color)
+        if self.table.rowCount():
+            self.table.scrollToItem(self.table.item(0, 10), QAbstractItemView.ScrollHint.PositionAtCenter)
         self.status.setText(
             f"{result.get('status', 'ERROR')}: {len(result.get('steps', []))} step(s), "
             f"{result.get('duration_ms', 0):.2f} ms — {result.get('error', '')}"
+        )
+
+    def _set_banner(self, text, color):
+        self.result_banner.setText(text)
+        self.result_banner.setStyleSheet(
+            f"font-size:16px;font-weight:bold;color:white;background:{color};"
+            "border-radius:6px;padding:8px;"
         )
 
     def _export_report(self):
