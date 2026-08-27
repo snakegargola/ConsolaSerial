@@ -36,6 +36,11 @@ class SpiSequenceWorker(threading.Thread):
             controller.configure(self.url, frequency=self.settings.frequency,
                                  cs_count=self.settings.cs_count,
                                  turbo=self.settings.turbo)
+            # Never let unread USB/MPSSE bytes from an earlier run satisfy a
+            # validation in this run.
+            ftdi = getattr(controller, "ftdi", None)
+            if ftdi is not None:
+                ftdi.purge_buffers()
             port = controller.get_port(self.settings.chip_select,
                                        freq=self.settings.frequency,
                                        mode=self.settings.mode)
