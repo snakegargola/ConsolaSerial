@@ -66,8 +66,8 @@ class SpiSequenceWidget(QWidget):
         self._set_banner("READY — select a preset and press Run sequence", "#3A7CA5")
         root.addWidget(self.result_banner)
 
-        columns = ("#", "Name", "Operation", "TX HEX", "RX", "Dummy",
-                   "Delay ms", "Validation", "Expected", "Mask", "Result")
+        columns = ("#", "Name", "Operation", "TX HEX", "RX length", "Dummy",
+                   "Delay ms", "Validation", "Expected", "Mask", "Actual RX", "Result")
         self.table = QTableWidget(0, len(columns))
         self.table.setHorizontalHeaderLabels(columns)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -76,6 +76,7 @@ class SpiSequenceWidget(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(11, QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
@@ -124,7 +125,7 @@ class SpiSequenceWidget(QWidget):
         for column, value in ((3, step.tx_template or format_spi_hex(step.tx)),
                               (5, f"{step.dummy_byte:02X}"),
                               (8, format_spi_hex(step.expected)),
-                              (9, format_spi_hex(step.mask)), (10, "")):
+                              (9, format_spi_hex(step.mask)), (10, ""), (11, "")):
             self.table.setItem(row, column, QTableWidgetItem(value))
         rx = QSpinBox(); rx.setRange(0, 65280); rx.setValue(step.read_length)
         delay = QSpinBox(); delay.setRange(0, 3_600_000); delay.setValue(step.delay_ms)
@@ -222,9 +223,10 @@ class SpiSequenceWidget(QWidget):
         self._run_number += 1
         self._last_result = None
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 10)
-            if item is not None:
-                item.setText("")
+            for column in (10, 11):
+                item = self.table.item(row, column)
+                if item is not None:
+                    item.setText("")
         self._set_banner(f"RUN #{self._run_number} — clearing previous RX/result…", "#3A7CA5")
         self.status.setText("Previous result and report cleared.")
 
@@ -238,7 +240,8 @@ class SpiSequenceWidget(QWidget):
             row = item["index"]
             if row < self.table.rowCount():
                 details = item.get("details") or format_spi_hex(item.get("rx", b""))
-                self.table.item(row, 10).setText(f"{item['status']} {details}".strip())
+                self.table.item(row, 10).setText(format_spi_hex(item.get("rx", b"")))
+                self.table.item(row, 11).setText(f"{item['status']} {details}".strip())
         completed = len(result.get("steps", []))
         passed = sum(item.get("status") == "PASS" for item in result.get("steps", []))
         failed = sum(item.get("status") == "FAIL" for item in result.get("steps", []))
@@ -246,7 +249,7 @@ class SpiSequenceWidget(QWidget):
         successful = status in ("OK", "PASS") and not failed
         color = "#238636" if successful else "#C62828"
         if status == "STOPPED": color = "#6B7280"
-        outcome = "PASS — TEST COMPLETED CORRECTLY" if successful else status
+        outcome = "DATA MATCH — ACTUAL RX == EXPECTED" if successful else status
         self._set_banner(f"RUN #{self._run_number} {outcome} — completed {completed}, PASS {passed}, FAIL {failed}", color)
         if self.table.rowCount():
             self.table.scrollToItem(self.table.item(0, 10), QAbstractItemView.ScrollHint.PositionAtCenter)

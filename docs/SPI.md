@@ -106,6 +106,10 @@ UART: cada operación abre la interfaz FTDI, transfiere y la cierra.
 Cada ejecución borra primero resultados/reportes anteriores, incrementa `RUN #`
 y purga los buffers USB/MPSSE antes de transmitir. Así una validación nunca puede
 aprobarse usando bytes pendientes de una corrida anterior.
+La tabla separa `RX length` (cantidad solicitada) de `Actual RX` (bytes crudos
+devueltos por PyFtdi). `DATA MATCH` significa únicamente que `Actual RX` satisface
+la validación; no demuestra por sí solo la presencia de un cable si la placa
+realimenta internamente la señal o deja MISO flotante.
 
 ## Memorias SPI
 
