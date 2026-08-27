@@ -34,6 +34,8 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 - Maestro SPI por interfaz MPSSE con modos 0–3, reloj editable, hasta cinco
   señales `/CS`, escritura, lectura, Write→Read, full-duplex e historial
 - Pruebas rápidas SPI de loopback MOSI→MISO e identificación JEDEC `0x9F`
+  con perfiles JSON y secuencias editables para memorias, pantallas y comandos
+  de dispositivos.
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
   máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y

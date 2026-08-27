@@ -38,6 +38,8 @@ from .spi_bus import (
     parse_spi_hex,
 )
 from .spi_worker import SpiTransactionWorker
+from .spi_sequence_widget import SpiSequenceWidget
+from .spi_sequence_worker import SpiSequenceWorker
 
 
 OPERATION_LABELS = {
@@ -54,6 +56,7 @@ class SpiSessionPanel(QWidget):
     """Interactive 8-bit, MSB-first SPI master session."""
 
     transaction_finished = pyqtSignal(object)
+    sequence_finished = pyqtSignal(object)
 
     def __init__(self, interface, bridge, config, channel_manager, parent=None):
         super().__init__(parent)
@@ -67,6 +70,7 @@ class SpiSessionPanel(QWidget):
         self._history = []
         self._shutting_down = False
         self.transaction_finished.connect(self._transaction_done)
+        self.sequence_finished.connect(self._sequence_done)
         self._build_ui()
         self._load_config()
         self._update_operation_ui()
@@ -79,6 +83,9 @@ class SpiSessionPanel(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_transaction_tab(), "Transactions")
         self.tabs.addTab(self._build_quick_tests_tab(), "Quick tests")
+        self.sequence_widget = SpiSequenceWidget()
+        self.sequence_widget.run_requested.connect(self._run_sequence)
+        self.tabs.addTab(self.sequence_widget, "Command sequences")
         self.tabs.addTab(self._build_history_tab(), "History")
         root.addWidget(self.tabs, stretch=1)
 
@@ -385,6 +392,34 @@ class SpiSessionPanel(QWidget):
             url, settings, transaction, self.transaction_finished.emit
         )
         self._worker.start()
+
+    def _run_sequence(self, steps):
+        if self.is_session_active():
+            return
+        try:
+            settings, _dummy = self._settings()
+            self.channel_manager.acquire(
+                self.session_channel, "SPI", self._channel_owner
+            )
+        except (ValueError, InterfaceBusyError) as exc:
+            self.sequence_widget.status.setText(f"ERROR: {exc}")
+            return
+        self._set_busy(True)
+        self.sequence_widget.set_busy(True)
+        url = f"{self.bound_bridge.base_url}/{self.session_interface}"
+        self._worker = SpiSequenceWorker(
+            url, settings, steps, self.sequence_finished.emit
+        )
+        self._worker.start()
+
+    def _sequence_done(self, result):
+        self._worker = None
+        self._set_busy(False)
+        self.sequence_widget.set_busy(False)
+        self.sequence_widget.show_result(result)
+        self.status_label.setText(self.sequence_widget.status.text())
+        if self._shutting_down:
+            self.channel_manager.release(self.session_channel, self._channel_owner)
 
     def _transaction_done(self, result):
         self._worker = None
