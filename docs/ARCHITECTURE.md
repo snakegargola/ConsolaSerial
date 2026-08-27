@@ -36,6 +36,7 @@ SerialPython/
 │   ├── spi_memory_worker.py     # Lectura/programación/borrado verificado
 │   ├── spi_memory_widget.py     # Visor HEX/BIN y controles protegidos
 │   ├── spi_register_widget.py   # Inspector genérico de registros SPI
+│   ├── spi_register_profile.py  # Esquema versionado de perfiles de registros
 │   ├── display_image_converter.py # Imágenes monocromáticas SSD1306
 │   ├── config_manager.py        # Gestión de configuración (JSON)
 │   └── log_manager.py           # Gestión de logs

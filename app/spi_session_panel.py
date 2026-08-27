@@ -309,6 +309,8 @@ class SpiSessionPanel(QWidget):
     def shutdown_session(self):
         self._collect_config()
         self._shutting_down = True
+        if hasattr(self, "register_widget"):
+            self.register_widget.stop_polling()
         if not self.is_session_active():
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -606,6 +608,9 @@ class SpiSessionPanel(QWidget):
         self.loopback_edit.setText(str(self.config.get(
             "spi_loopback_pattern", "00 FF AA 55 12 34 56 78"
         )))
+        self.register_widget.apply_settings(self.config.get("spi_register", {}))
+        self.memory_widget.apply_settings(self.config.get("spi_memory", {}))
+        self.sequence_widget.repeat_spin.setValue(int(self.config.get("spi_sequence_repeat", 1)))
 
     def _collect_config(self):
         try:
@@ -622,3 +627,6 @@ class SpiSessionPanel(QWidget):
         self.config.set("spi_rx_length", self.rx_length_spin.value())
         self.config.set("spi_operation", self.operation_combo.currentData())
         self.config.set("spi_loopback_pattern", self.loopback_edit.text())
+        self.config.set("spi_register", self.register_widget.settings_dict())
+        self.config.set("spi_memory", self.memory_widget.settings_dict())
+        self.config.set("spi_sequence_repeat", self.sequence_widget.repeat_spin.value())

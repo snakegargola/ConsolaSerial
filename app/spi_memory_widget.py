@@ -44,10 +44,11 @@ class SpiMemoryWidget(QWidget):
         load = QPushButton("Load BIN for program"); load.clicked.connect(self._load_bin)
         program = QPushButton("Program + verify"); program.clicked.connect(lambda: self._request("program"))
         erase = QPushButton("Erase sector"); erase.clicked.connect(lambda: self._request("erase_sector"))
+        compare = QPushButton("Compare BIN"); compare.clicked.connect(self._compare_bin)
         save = QPushButton("Save buffer BIN"); save.clicked.connect(self._save_bin)
-        for column, button in enumerate((identify, read, load, program, erase, save)):
+        for column, button in enumerate((identify, read, load, program, erase, compare, save)):
             controls.addWidget(button, 1, column)
-        self._buttons = (identify, read, load, program, erase, save)
+        self._buttons = (identify, read, load, program, erase, compare, save)
         root.addLayout(controls)
         self.viewer = QTextEdit(); self.viewer.setReadOnly(True); self.viewer.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         root.addWidget(self.viewer, 1)
@@ -101,12 +102,32 @@ class SpiMemoryWidget(QWidget):
                 with open(path, "wb") as stream: stream.write(self._buffer)
             except OSError as exc: self.status.setText(f"ERROR: {exc}")
 
+    def _compare_bin(self):
+        if not self._buffer:
+            self.status.setText("Read or load a buffer before comparing."); return
+        path, _ = QFileDialog.getOpenFileName(self, "Compare with memory image", "", "Binary (*.bin)")
+        if not path: return
+        try:
+            with open(path, "rb") as stream: reference = stream.read()
+            count = max(len(reference), len(self._buffer))
+            differences = [index for index in range(count)
+                           if index >= len(reference) or index >= len(self._buffer)
+                           or reference[index] != self._buffer[index]]
+            preview = ", ".join(f"0x{self._base_address + item:X}" for item in differences[:8])
+            self.status.setText("MATCH: buffers are identical" if not differences else
+                                f"DIFFERENT: {len(differences)} byte(s); first: {preview}")
+        except OSError as exc: self.status.setText(f"ERROR: {exc}")
+
     def show_result(self, result):
         data = bytes(result.get("data", b"")); action = result.get("action")
         if action == "identify" and result.get("jedec"):
             item = result["jedec"]; sfdp = result.get("sfdp")
             if item.get("capacity") and item["capacity"] <= self.capacity.maximum():
                 self.capacity.setValue(item["capacity"])
+            if sfdp and sfdp.get("capacity") and sfdp["capacity"] <= self.capacity.maximum():
+                self.capacity.setValue(sfdp["capacity"])
+            if sfdp and sfdp.get("page_size"):
+                self.page_size.setValue(sfdp["page_size"])
             self.status.setText(f"{result['status']}: {item['manufacturer']} ID "
                                 f"{item['manufacturer_id']:02X} {item['memory_type']:02X} "
                                 f"{item['capacity_code']:02X}; SFDP: {'yes' if sfdp else 'no'} — "
@@ -119,3 +140,19 @@ class SpiMemoryWidget(QWidget):
 
     def set_busy(self, busy):
         for button in self._buttons: button.setEnabled(not busy)
+
+    def settings_dict(self):
+        return {"kind": self.kind.currentText(), "capacity": self.capacity.value(),
+                "address_bytes": self.address_bytes.value(), "page_size": self.page_size.value(),
+                "sector_size": self.sector_size.value(), "commands": self.commands.text(),
+                "address": self.address.text(), "length": self.length.value()}
+
+    def apply_settings(self, value):
+        if not isinstance(value, dict): return
+        self.kind.setCurrentText(str(value.get("kind", self.kind.currentText())))
+        for key, widget in (("capacity", self.capacity), ("address_bytes", self.address_bytes),
+                            ("page_size", self.page_size), ("sector_size", self.sector_size),
+                            ("length", self.length)):
+            if key in value: widget.setValue(int(value[key]))
+        if "commands" in value: self.commands.setText(str(value["commands"]))
+        if "address" in value: self.address.setText(str(value["address"]))

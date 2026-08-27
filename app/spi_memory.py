@@ -92,6 +92,38 @@ def parse_sfdp_header(payload):
             "access_protocol": payload[7]}
 
 
+def parse_sfdp(payload):
+    """Decode the SFDP header and useful fields from the JEDEC basic table."""
+    payload = bytes(payload)
+    result = parse_sfdp_header(payload)
+    headers = []
+    for index in range(result["parameter_headers"]):
+        offset = 8 + index * 8
+        if offset + 8 > len(payload): break
+        item = payload[offset:offset + 8]
+        parameter_id = item[0] | (item[7] << 8)
+        pointer = int.from_bytes(item[4:7], "little")
+        header = {"id": parameter_id, "minor": item[1], "major": item[2],
+                  "dwords": item[3], "pointer": pointer}
+        headers.append(header)
+        if parameter_id in (0xFF00, 0x0000) and pointer + 8 <= len(payload):
+            table = payload[pointer:pointer + item[3] * 4]
+            density_word = int.from_bytes(table[4:8], "little")
+            if density_word & 0x80000000:
+                exponent = density_word & 0x7FFFFFFF
+                capacity_bits = 1 << exponent if exponent < 63 else None
+            else:
+                capacity_bits = (density_word & 0x7FFFFFFF) + 1
+            if capacity_bits:
+                result["capacity"] = (capacity_bits + 7) // 8
+            if len(table) >= 44:
+                page_exponent = (int.from_bytes(table[40:44], "little") >> 4) & 0x0F
+                if page_exponent:
+                    result["page_size"] = 1 << page_exponent
+    result["parameters"] = headers
+    return result
+
+
 def format_hex_dump(payload, base_address=0, width=16):
     lines = []
     payload = bytes(payload)

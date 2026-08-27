@@ -7,7 +7,7 @@ import time
 
 from .spi_bus import classify_spi_error
 from .spi_bus import SPI_MAX_PAYLOAD
-from .spi_memory import iter_page_programs, parse_jedec_id, parse_sfdp_header
+from .spi_memory import iter_page_programs, parse_jedec_id, parse_sfdp
 
 
 class SpiMemoryWorker(threading.Thread):
@@ -31,11 +31,11 @@ class SpiMemoryWorker(threading.Thread):
                                        freq=self.settings.frequency, mode=self.settings.mode)
             if self.action == "identify":
                 jedec = self._exchange(port, b"\x9f", 3)
-                sfdp_raw = self._exchange(port, b"\x5a\x00\x00\x00\x00", 8)
+                sfdp_raw = self._exchange(port, b"\x5a\x00\x00\x00\x00", 256)
                 result.update(data=jedec, jedec=parse_jedec_id(jedec))
                 if all(value == 0x00 for value in jedec) or all(value == 0xFF for value in jedec):
                     result.update(status="FAIL", details="JEDEC response is all 00/FF; check wiring, /CS and SPI mode")
-                try: result["sfdp"] = parse_sfdp_header(sfdp_raw)
+                try: result["sfdp"] = parse_sfdp(sfdp_raw)
                 except ValueError: result["sfdp"] = None
             elif self.action == "read":
                 address, length = self.request["address"], self.request["length"]

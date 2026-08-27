@@ -73,7 +73,8 @@ cableado que pudiera dañar el módulo.
 
 Una secuencia completa o solamente la fila seleccionada puede repetirse. La
 ejecución se detiene en la primera validación fallida y muestra `PASS/FAIL` por
-paso. Esto permite convertir ejemplos del datasheet en pruebas de regresión.
+paso. Los resultados se exportan como reporte JSON o CSV. Esto permite convertir
+ejemplos del datasheet en pruebas de regresión.
 
 ## Inspector de registros
 
@@ -82,13 +83,17 @@ usan registros. El opcode o los bits de lectura/escritura se combinan con el
 primer byte de dirección; también se configuran ancho de dirección, bytes dummy,
 tamaño, endian, signo, escala, offset y unidad. La herramienta muestra los bytes
 reales y el valor convertido, reutilizando el mismo codec probado por I²C.
+Los perfiles `.spireg.json` guardan el framing y la conversión. El polling
+mantiene muestras con mínimo, máximo y promedio y permite exportarlas a CSV.
 
 ## Memorias SPI
 
 `Memory` soporta geometrías editables para SPI NOR, EEPROM 25xx y FRAM. Incluye:
 
 - identificación JEDEC y encabezado SFDP;
+- decodificación SFDP de capacidad y tamaño de página cuando están publicados;
 - lectura por rango con vista HEX/ASCII y archivos BIN;
+- comparación de la lectura o buffer contra otro archivo BIN;
 - programación dividida sin cruzar páginas;
 - `Write Enable`, polling del registro de estado y timeout;
 - lectura posterior y verificación byte por byte;
@@ -98,6 +103,9 @@ Programar o borrar requiere confirmación explícita. Los comandos, ancho de
 dirección, capacidad, página, sector y máscara BUSY deben verificarse contra el
 datasheet exacto. Una geometría incorrecta puede modificar otra región o dejar
 la memoria ocupada. La identificación y lectura son el flujo inicial recomendado.
+
+Los ajustes del inspector, memoria y repetición de secuencias se conservan por
+adaptador e interfaz mediante la configuración del workspace USB Bridge.
 
 ## Pruebas rápidas
 
