@@ -29,6 +29,9 @@ SerialPython/
 │   ├── spi_bus.py               # Modelo y ejecución neutral de transacciones SPI
 │   ├── spi_worker.py            # Acceso PyFtdi/SPI en segundo plano
 │   ├── spi_session_panel.py     # Laboratorio SPI por interfaz MPSSE
+│   ├── spi_sequence.py          # Perfiles, pasos y validaciones sin hardware
+│   ├── spi_sequence_worker.py   # Ejecución completa en segundo plano
+│   ├── spi_sequence_widget.py   # Editor/importador de perfiles SPI
 │   ├── display_image_converter.py # Imágenes monocromáticas SSD1306
 │   ├── config_manager.py        # Gestión de configuración (JSON)
 │   └── log_manager.py           # Gestión de logs

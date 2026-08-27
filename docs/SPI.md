@@ -52,6 +52,25 @@ dummies. La respuesta se presenta en HEX y ASCII. Cada ejecución guarda hora,
 modo, reloj, `/CS`, TX, RX, estado y duración; el historial puede exportarse a
 CSV o JSON.
 
+## Perfiles y secuencias de comandos
+
+`Command sequences` permite construir pruebas reproducibles sin modificar el
+código. Cada fila puede ser `Write`, `Read`, `Write → Read`, `Full duplex` o
+`Delay`, y conserva TX, longitud RX, byte dummy y espera posterior. La respuesta
+puede validarse por igualdad exacta, igualdad con máscara o rechazando respuestas
+completamente `00`/`FF`, útil para detectar un dispositivo desconectado.
+
+Los perfiles `.spiprofile.json` son editables, versionados e independientes de
+Qt y PyFtdi. Se incluyen puntos de partida de solo lectura para identificación
+SPI NOR, lectura EEPROM 25xx y comandos de inicialización de pantallas. Los
+presets no incluyen programación ni borrado para evitar modificar memorias por
+accidente.
+
+La plantilla de pantalla sirve para ordenar y validar comandos, pero una pantalla
+real normalmente necesita pines `D/C` y `RESET`. La aplicación todavía no ejecuta
+esas señales GPIO; el perfil lo indica explícitamente en lugar de asumir un
+cableado que pudiera dañar el módulo.
+
 ## Pruebas rápidas
 
 ### Loopback
