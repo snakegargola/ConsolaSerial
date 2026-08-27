@@ -175,6 +175,8 @@ def classify_spi_error(exc):
     lowered = message.lower()
     if "mode" in lowered or "cpha" in lowered:
         status = "MODE"
+    elif isinstance(exc, PermissionError) or "protect" in lowered:
+        status = "PROTECTED"
     elif "timeout" in lowered:
         status = "TIMEOUT"
     elif "usb" in lowered or "backend" in lowered or "ftdi" in lowered:

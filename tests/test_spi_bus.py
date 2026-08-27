@@ -4,7 +4,7 @@ import unittest
 
 from app.spi_bus import (
     SPI_MAX_PAYLOAD, SpiBusSettings, SpiTransaction,
-    execute_spi_transaction, parse_spi_hex,
+    classify_spi_error, execute_spi_transaction, parse_spi_hex,
 )
 
 
@@ -87,6 +87,10 @@ class SpiBusTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             SpiTransaction("read", read_length=SPI_MAX_PAYLOAD + 1)
+
+    def test_memory_protection_has_a_stable_error_category(self):
+        result = classify_spi_error(PermissionError("Protection bits active"))
+        self.assertEqual(result["status"], "PROTECTED")
 
 
 if __name__ == "__main__":

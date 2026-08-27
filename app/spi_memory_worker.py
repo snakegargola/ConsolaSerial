@@ -7,7 +7,7 @@ import time
 
 from .spi_bus import classify_spi_error
 from .spi_bus import SPI_MAX_PAYLOAD
-from .spi_memory import iter_page_programs, parse_jedec_id, parse_sfdp
+from .spi_memory import decode_status_register, iter_page_programs, parse_jedec_id, parse_sfdp
 
 
 class SpiMemoryWorker(threading.Thread):
@@ -41,8 +41,14 @@ class SpiMemoryWorker(threading.Thread):
                 address, length = self.request["address"], self.request["length"]
                 result["data"] = self._read(port, address, length)
                 result["address"] = address
+            elif self.action == "status":
+                raw = self._exchange(port, bytes((self.geometry.status_command,)), 1)[0]
+                result.update(data=bytes((raw,)), status_register=decode_status_register(
+                    raw, busy_mask=self.geometry.busy_mask,
+                    protection_mask=self.geometry.protection_mask))
             elif self.action == "program":
                 address, payload = self.request["address"], bytes(self.request["data"])
+                self._ensure_unprotected(port)
                 for current, chunk in iter_page_programs(self.geometry, address, payload):
                     self._write_enable(port)
                     port.write(bytes((self.geometry.program_command,)) +
@@ -55,6 +61,7 @@ class SpiMemoryWorker(threading.Thread):
             elif self.action == "erase_sector":
                 address = self.request["address"]
                 aligned = address - address % self.geometry.sector_size
+                self._ensure_unprotected(port)
                 self._write_enable(port)
                 port.write(bytes((self.geometry.erase_command,)) + self.geometry.address(aligned))
                 self._wait_ready(port, timeout=120.0)
@@ -88,6 +95,17 @@ class SpiMemoryWorker(threading.Thread):
 
     def _write_enable(self, port):
         port.write(bytes((self.geometry.write_enable_command,)), start=True, stop=True)
+
+    def _ensure_unprotected(self, port):
+        if not self.geometry.protection_mask: return
+        raw = self._exchange(port, bytes((self.geometry.status_command,)), 1)[0]
+        status = decode_status_register(raw, busy_mask=self.geometry.busy_mask,
+                                        protection_mask=self.geometry.protection_mask)
+        if status["protected"]:
+            raise PermissionError(
+                f"Memory protection bits are active (status 0x{raw:02X}, mask "
+                f"0x{self.geometry.protection_mask:02X}). Unlock with the vendor procedure first."
+            )
 
     def _wait_ready(self, port, timeout=10.0):
         if self.geometry.kind == "SPI FRAM":
