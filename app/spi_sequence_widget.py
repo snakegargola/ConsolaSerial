@@ -1,6 +1,9 @@
-"""Qt editor for SPI command profiles; hardware access stays in the session."""
+"""Qt editor and reporter for SPI sequences; hardware stays in the session."""
 
 from __future__ import annotations
+
+import csv
+import json
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
@@ -23,7 +26,7 @@ class SpiSequenceWidget(QWidget):
     run_requested = pyqtSignal(object)
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent); self._last_result = None
         self._profiles = builtin_spi_profiles()
         self._build_ui()
         self._load_profile(self._profiles[0])
@@ -84,6 +87,9 @@ class SpiSequenceWidget(QWidget):
         self.run_btn = QPushButton("Run sequence")
         self.run_btn.clicked.connect(self._run)
         actions.addWidget(self.run_btn)
+        report = QPushButton("Export report")
+        report.clicked.connect(self._export_report)
+        actions.addWidget(report)
         root.addLayout(actions)
         self.status = QLabel("Profiles are editable. Verify commands against the datasheet.")
         self.status.setWordWrap(True)
@@ -195,6 +201,7 @@ class SpiSequenceWidget(QWidget):
         self.run_btn.setEnabled(not busy)
 
     def show_result(self, result):
+        self._last_result = result
         for item in result.get("steps", []):
             row = item["index"]
             if row < self.table.rowCount():
@@ -204,6 +211,28 @@ class SpiSequenceWidget(QWidget):
             f"{result.get('status', 'ERROR')}: {len(result.get('steps', []))} step(s), "
             f"{result.get('duration_ms', 0):.2f} ms — {result.get('error', '')}"
         )
+
+    def _export_report(self):
+        if not self._last_result:
+            self.status.setText("Run a sequence before exporting a report."); return
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Export SPI validation report", "spi-validation-report.json",
+            "JSON (*.json);;CSV (*.csv)")
+        if not path: return
+        try:
+            steps = []
+            for item in self._last_result.get("steps", []):
+                row = dict(item); row["tx"] = format_spi_hex(row.get("tx", b"")); row["rx"] = format_spi_hex(row.get("rx", b""))
+                steps.append(row)
+            with open(path, "w", encoding="utf-8", newline="") as stream:
+                if path.lower().endswith(".csv") or selected.startswith("CSV"):
+                    if steps:
+                        writer = csv.DictWriter(stream, fieldnames=steps[0].keys()); writer.writeheader(); writer.writerows(steps)
+                else:
+                    summary = {key: value for key, value in self._last_result.items() if key != "steps"}
+                    summary["steps"] = steps; json.dump(summary, stream, indent=2, ensure_ascii=False)
+            self.status.setText(f"Report exported: {path}")
+        except OSError as exc: self.status.setText(f"ERROR: {exc}")
 
     def _save(self):
         try:

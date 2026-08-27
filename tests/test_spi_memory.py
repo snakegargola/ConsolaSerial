@@ -2,7 +2,7 @@ import unittest
 
 from app.spi_memory import (
     SpiMemoryGeometry, format_hex_dump, iter_page_programs,
-    parse_jedec_id, parse_sfdp_header, validate_memory_range,
+    parse_jedec_id, parse_sfdp, parse_sfdp_header, validate_memory_range,
 )
 
 
@@ -26,6 +26,16 @@ class SpiMemoryTests(unittest.TestCase):
         sfdp = parse_sfdp_header(b"SFDP\x06\x01\x02\xff")
         self.assertEqual(sfdp["parameter_headers"], 3)
         with self.assertRaises(ValueError): parse_sfdp_header(b"NOPE1234")
+
+    def test_basic_sfdp_density_and_page_size(self):
+        payload = bytearray(80)
+        payload[:8] = b"SFDP\x06\x01\x00\xff"
+        payload[8:16] = bytes((0x00, 0x06, 0x01, 11, 16, 0, 0, 0xFF))
+        payload[20:24] = (8 * 1024 * 1024 - 1).to_bytes(4, "little")
+        payload[56:60] = (8 << 4).to_bytes(4, "little")
+        decoded = parse_sfdp(payload)
+        self.assertEqual(decoded["capacity"], 1024 * 1024)
+        self.assertEqual(decoded["page_size"], 256)
 
     def test_hex_dump_has_address_and_ascii(self):
         output = format_hex_dump(b"ABC\x00", 0x20)
