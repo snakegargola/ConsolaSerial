@@ -46,6 +46,14 @@ class SpiMemoryTests(unittest.TestCase):
         self.assertTrue(decoded["write_enabled"])
         self.assertTrue(decoded["protected"])
 
+    def test_four_byte_dedicated_opcodes_are_selected(self):
+        geometry = SpiMemoryGeometry(capacity=32 << 20, address_bytes=4,
+                                     address_strategy="dedicated")
+        self.assertEqual(geometry.command_for("read"), 0x13)
+        self.assertEqual(geometry.command_for("program"), 0x12)
+        self.assertEqual(geometry.command_for("erase"), 0x21)
+        self.assertEqual(geometry.address(0x01000000), b"\x01\x00\x00\x00")
+
     def test_hex_dump_has_address_and_ascii(self):
         output = format_hex_dump(b"ABC\x00", 0x20)
         self.assertIn("00000020", output)

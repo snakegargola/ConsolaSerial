@@ -29,6 +29,9 @@ class SpiMemoryWorker(threading.Thread):
                                  turbo=self.settings.turbo)
             port = controller.get_port(self.settings.chip_select,
                                        freq=self.settings.frequency, mode=self.settings.mode)
+            entered_4byte = self.geometry.address_bytes == 4 and self.geometry.address_strategy == "enter_mode"
+            if entered_4byte:
+                port.write(b"\xb7", start=True, stop=True)
             if self.action == "identify":
                 jedec = self._exchange(port, b"\x9f", 3)
                 sfdp_raw = self._exchange(port, b"\x5a\x00\x00\x00\x00", 256)
@@ -51,7 +54,7 @@ class SpiMemoryWorker(threading.Thread):
                 self._ensure_unprotected(port)
                 for current, chunk in iter_page_programs(self.geometry, address, payload):
                     self._write_enable(port)
-                    port.write(bytes((self.geometry.program_command,)) +
+                    port.write(bytes((self.geometry.command_for("program"),)) +
                                self.geometry.address(current) + chunk)
                     self._wait_ready(port)
                 verified = self._read(port, address, len(payload))
@@ -63,7 +66,7 @@ class SpiMemoryWorker(threading.Thread):
                 aligned = address - address % self.geometry.sector_size
                 self._ensure_unprotected(port)
                 self._write_enable(port)
-                port.write(bytes((self.geometry.erase_command,)) + self.geometry.address(aligned))
+                port.write(bytes((self.geometry.command_for("erase"),)) + self.geometry.address(aligned))
                 self._wait_ready(port, timeout=120.0)
                 result.update(address=aligned, details="Sector erase completed")
             else:
@@ -72,6 +75,9 @@ class SpiMemoryWorker(threading.Thread):
         except Exception as exc:
             result.update(classify_spi_error(exc))
         finally:
+            if controller is not None and 'port' in locals() and locals().get('entered_4byte'):
+                try: port.write(b"\xe9", start=True, stop=True)
+                except Exception: pass
             if controller:
                 try: controller.close()
                 except Exception: pass
@@ -89,7 +95,7 @@ class SpiMemoryWorker(threading.Thread):
         while len(output) < length:
             current = address + len(output)
             count = min(SPI_MAX_PAYLOAD, length - len(output))
-            command = bytes((self.geometry.read_command,)) + self.geometry.address(current)
+            command = bytes((self.geometry.command_for("read"),)) + self.geometry.address(current)
             output.extend(self._exchange(port, command, count))
         return bytes(output)
 

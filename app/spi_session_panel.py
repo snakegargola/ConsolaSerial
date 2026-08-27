@@ -102,6 +102,7 @@ class SpiSessionPanel(QWidget):
         self.tabs.addTab(self.register_widget, "Register inspector")
         self.register_map_widget = SpiRegisterMapWidget()
         self.register_map_widget.read_requested.connect(self._run_register_map)
+        self.register_map_widget.write_requested.connect(self._run_register_map_write)
         self._register_map_profile = None
         self.tabs.addTab(self.register_map_widget, "Register map")
         self.memory_widget = SpiMemoryWidget()
@@ -485,6 +486,19 @@ class SpiSessionPanel(QWidget):
         url = f"{self.bound_bridge.base_url}/{self.session_interface}"
         self._worker = SpiRegisterMapWorker(url, settings, profile, indexes,
                                             self.register_map_finished.emit)
+        self._worker.start()
+
+    def _run_register_map_write(self, profile, index, data):
+        if self.is_session_active(): return
+        try:
+            settings, _dummy = self._settings()
+            self.channel_manager.acquire(self.session_channel, "SPI", self._channel_owner)
+        except (ValueError, InterfaceBusyError) as exc:
+            self.register_map_widget.status.setText(f"ERROR: {exc}"); return
+        self._register_map_profile = profile; self._set_busy(True)
+        url = f"{self.bound_bridge.base_url}/{self.session_interface}"
+        self._worker = SpiRegisterMapWorker(url, settings, profile, (index,),
+                                            self.register_map_finished.emit, write_data=data)
         self._worker.start()
 
     def _register_map_done(self, result):

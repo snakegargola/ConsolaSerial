@@ -13,7 +13,7 @@ from .spi_bus import SpiTransaction, format_spi_hex, parse_spi_hex
 
 SPI_PROFILE_SCHEMA = "consola-serial.spi-profile"
 SPI_PROFILE_VERSION = 1
-STEP_OPERATIONS = frozenset({"write", "read", "write_read", "duplex", "delay"})
+STEP_OPERATIONS = frozenset({"write", "read", "write_read", "duplex", "loopback", "delay"})
 VALIDATIONS = frozenset({"none", "equals", "masked_equals", "not_all_00_ff"})
 
 
@@ -204,5 +204,11 @@ def builtin_spi_profiles():
             SpiSequenceStep("Reset wait", "delay", delay_ms=150),
             SpiSequenceStep("Sleep out command", "write", b"\x11"),
             SpiSequenceStep("Sleep-out wait", "delay", delay_ms=120),
+        )),
+        SpiDeviceProfile("SPI link stability loopback", "Diagnostic", (
+            "Disconnect the target and connect MOSI to MISO. Increase Repeat to run a non-destructive stability test."
+        ), (
+            SpiSequenceStep("Loopback frame", "loopback", bytes(range(32)), 32, 0x00,
+                            validation="equals", expected=bytes(range(32))),
         )),
     )

@@ -31,11 +31,16 @@ class SpiMemoryWidget(QWidget):
         self.commands.setToolTip("Read, Program, Write Enable, Status, Sector Erase, Busy mask")
         self.protection_mask = QLineEdit("3C")
         self.protection_mask.setToolTip("Status bits that mean protected. Use 00 only when the datasheet confirms no protection check is needed.")
+        self.address_strategy = QComboBox()
+        self.address_strategy.addItem("Native opcodes / 3-byte", "native")
+        self.address_strategy.addItem("Enter B7 / exit E9", "enter_mode")
+        self.address_strategy.addItem("Dedicated 13/12/21 opcodes", "dedicated")
         for label, widget in (("Type", self.kind), ("Capacity (bytes)", self.capacity),
                               ("Address bytes", self.address_bytes), ("Page size", self.page_size),
                               ("Sector size", self.sector_size), ("Commands (HEX)", self.commands),
                               ("Protection mask", self.protection_mask)):
             form.addRow(label, widget)
+        form.addRow("Address strategy", self.address_strategy)
         root.addWidget(config)
         controls = QGridLayout()
         self.address = QLineEdit("000000"); self.length = QSpinBox()
@@ -68,7 +73,8 @@ class SpiMemoryWidget(QWidget):
         return SpiMemoryGeometry(self.kind.currentText(), self.capacity.value(),
                                  self.address_bytes.value(), self.page_size.value(),
                                  self.sector_size.value(), *command,
-                                 protection_mask=protection[0])
+                                 protection_mask=protection[0],
+                                 address_strategy=self.address_strategy.currentData())
 
     def _address(self):
         try: return int(self.address.text().strip(), 16)
@@ -182,6 +188,7 @@ class SpiMemoryWidget(QWidget):
                 "address_bytes": self.address_bytes.value(), "page_size": self.page_size.value(),
                 "sector_size": self.sector_size.value(), "commands": self.commands.text(),
                 "protection_mask": self.protection_mask.text(),
+                "address_strategy": self.address_strategy.currentData(),
                 "address": self.address.text(), "length": self.length.value()}
 
     def apply_settings(self, value):
@@ -193,4 +200,7 @@ class SpiMemoryWidget(QWidget):
             if key in value: widget.setValue(int(value[key]))
         if "commands" in value: self.commands.setText(str(value["commands"]))
         if "protection_mask" in value: self.protection_mask.setText(str(value["protection_mask"]))
+        if "address_strategy" in value:
+            index = self.address_strategy.findData(value["address_strategy"])
+            if index >= 0: self.address_strategy.setCurrentIndex(index)
         if "address" in value: self.address.setText(str(value["address"]))

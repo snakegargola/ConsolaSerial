@@ -34,7 +34,7 @@ class SpiSequenceTests(unittest.TestCase):
 
     def test_presets_are_read_only_starting_points(self):
         profiles = builtin_spi_profiles()
-        self.assertEqual({item.category for item in profiles}, {"Memory", "Display"})
+        self.assertEqual({item.category for item in profiles}, {"Memory", "Display", "Diagnostic"})
         dangerous = {b"\x02", b"\x20", b"\x52", b"\xd8", b"\xc7"}
         self.assertFalse(any(step.tx[:1] in dangerous for profile in profiles
                              for step in profile.steps))

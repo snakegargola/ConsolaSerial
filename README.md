@@ -44,6 +44,8 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
   desde datos JEDEC/SFDP para memorias SPI.
 - Mapas de múltiples registros SPI con polling/CSV y secuencias cancelables con
   timeout y variables dinámicas seguras.
+- Escritura confirmada de registros y estrategias NOR de cuatro bytes con
+  restauración segura del modo de direccionamiento.
 - Inspector I²C de registros/sensores con HEX, decimal, octal, binario, signo,
   máscara, escala, offset, fórmula segura, campos de bits y lectura periódica
 - Mapas de registros guardables en JSON, lectura individual/total, polling y

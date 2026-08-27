@@ -23,6 +23,7 @@ class SpiMemoryGeometry:
     busy_mask: int = 0x01
     protection_mask: int = 0x3C
     write_delay_ms: int = 5
+    address_strategy: str = "native"
 
     def __post_init__(self):
         if self.kind not in MEMORY_KINDS:
@@ -39,6 +40,15 @@ class SpiMemoryGeometry:
                      "status_command", "erase_command", "busy_mask", "protection_mask"):
             if not 0 <= int(getattr(self, name)) <= 0xFF:
                 raise ValueError(f"{name} must be one byte.")
+        if self.address_strategy not in ("native", "enter_mode", "dedicated"):
+            raise ValueError("4-byte strategy must be native, enter_mode, or dedicated.")
+
+    def command_for(self, operation):
+        base = {"read": self.read_command, "program": self.program_command,
+                "erase": self.erase_command}[operation]
+        if self.address_bytes == 4 and self.address_strategy == "dedicated":
+            return {"read": 0x13, "program": 0x12, "erase": 0x21}[operation]
+        return base
 
     def address(self, value):
         value = int(value)

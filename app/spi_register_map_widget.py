@@ -5,7 +5,7 @@ from datetime import datetime
 
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QInputDialog, QMessageBox, QPushButton,
     QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -16,6 +16,7 @@ from .spi_register_map import SpiRegisterDefinition, SpiRegisterMap, example_spi
 
 class SpiRegisterMapWidget(QWidget):
     read_requested = pyqtSignal(object, object)
+    write_requested = pyqtSignal(object, int, object)
 
     COLUMNS = ("Name", "Address", "Bytes", "Access", "Endian", "Signed",
                "Scale", "Offset", "Unit", "Raw", "Value")
@@ -40,6 +41,7 @@ class SpiRegisterMapWidget(QWidget):
         actions = QHBoxLayout()
         for label, handler in (("Add", self._add), ("Remove", self._remove),
                                ("Read selected", self._read_selected), ("Read all", self._read_all),
+                               ("Write selected", self._write_selected),
                                ("Save map", self._save), ("Load map", self._load),
                                ("Export CSV", self._export)):
             button = QPushButton(label); button.clicked.connect(handler); actions.addWidget(button)
@@ -85,11 +87,32 @@ class SpiRegisterMapWidget(QWidget):
 
     def _read_all(self): self._request(range(self.table.rowCount()))
 
+    def _write_selected(self):
+        row = self.table.currentRow()
+        if row < 0: return
+        try:
+            profile = self.profile(); register = profile.registers[row]
+            text, accepted = QInputDialog.getText(self, "Write SPI register",
+                                                  f"{register.name}: enter {register.length} HEX byte(s)")
+            if not accepted: return
+            from .spi_bus import parse_spi_hex
+            data = parse_spi_hex(text, allow_empty=False)
+            if len(data) != register.length: raise ValueError(f"Expected {register.length} byte(s).")
+            if QMessageBox.warning(self, "Confirm register write",
+                    f"Write {format_spi_hex(data)} to {register.name} (0x{register.address:X})?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel) == QMessageBox.StandardButton.Yes:
+                self.write_requested.emit(profile, row, data)
+        except ValueError as exc: self.status.setText(f"INVALID: {exc}")
+
     def show_result(self, result, profile):
         if result.get("status") != "OK": self.status.setText(f"{result.get('status')}: {result.get('error')}"); return
         timestamp = datetime.now().isoformat(timespec="milliseconds")
         for value in result.get("values", []):
             index = value["index"]; definition = profile.registers[index]; data = value["data"]
+            if value.get("written"):
+                self.table.item(index, 9).setText(format_spi_hex(data)); self.table.item(index, 10).setText("WRITTEN")
+                continue
             try:
                 decoded = decode_i2c_value(data, byteorder=definition.byteorder, signed=definition.signed,
                                            scale=definition.scale, offset=definition.offset)
