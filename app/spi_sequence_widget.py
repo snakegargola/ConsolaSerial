@@ -59,6 +59,13 @@ class SpiSequenceWidget(QWidget):
         self.notes_label.setWordWrap(True)
         root.addWidget(self.notes_label)
 
+        # Keep the outcome above the scrollable table so it is always visible.
+        self.result_banner = QLabel("READY — press Run sequence to start")
+        self.result_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.result_banner.setMinimumHeight(46)
+        self._set_banner("READY — select a preset and press Run sequence", "#3A7CA5")
+        root.addWidget(self.result_banner)
+
         columns = ("#", "Name", "Operation", "TX HEX", "RX", "Dummy",
                    "Delay ms", "Validation", "Expected", "Mask", "Result")
         self.table = QTableWidget(0, len(columns))
@@ -97,11 +104,6 @@ class SpiSequenceWidget(QWidget):
         report.clicked.connect(self._export_report)
         actions.addWidget(report)
         root.addLayout(actions)
-        self.result_banner = QLabel("READY — press Run sequence to start")
-        self.result_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_banner.setMinimumHeight(42)
-        self._set_banner("READY", "#3A7CA5")
-        root.addWidget(self.result_banner)
         self.status = QLabel("Profiles are editable. Verify commands against the datasheet.")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
@@ -231,9 +233,11 @@ class SpiSequenceWidget(QWidget):
         passed = sum(item.get("status") == "PASS" for item in result.get("steps", []))
         failed = sum(item.get("status") == "FAIL" for item in result.get("steps", []))
         status = result.get("status", "ERROR")
-        color = "#238636" if status in ("OK", "PASS") and not failed else "#C62828"
+        successful = status in ("OK", "PASS") and not failed
+        color = "#238636" if successful else "#C62828"
         if status == "STOPPED": color = "#6B7280"
-        self._set_banner(f"{status} — completed {completed}, PASS {passed}, FAIL {failed}", color)
+        outcome = "PASS — TEST COMPLETED CORRECTLY" if successful else status
+        self._set_banner(f"{outcome} — completed {completed}, PASS {passed}, FAIL {failed}", color)
         if self.table.rowCount():
             self.table.scrollToItem(self.table.item(0, 10), QAbstractItemView.ScrollHint.PositionAtCenter)
         self.status.setText(
