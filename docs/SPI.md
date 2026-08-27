@@ -155,6 +155,12 @@ Desconecta primero el dispositivo bajo prueba y conecta `xDBUS1` (MOSI) con
 `PASS` sólo si cada byte recibido coincide. No verifica un esclavo SPI: verifica
 el adaptador, el reloj y la ruta de datos.
 
+En FT4232H se observó que el comando MPSSE full-duplex puede devolver un eco de
+TX aun con DI desconectado. Por ello el preset de diagnóstico no usa
+`SpiPort.exchange(duplex=True)`: genera SCLK/MOSI explícitamente y muestrea el pin
+DBUS2 como entrada GPIO física. `Actual RX` proviene de esas muestras. Esta ruta
+prioriza validación de cableado sobre velocidad y se limita a 1 MHz.
+
 ### JEDEC ID
 
 `Read JEDEC ID` envía `9F`, mantiene `/CS` y lee tres bytes usando `FF` como
