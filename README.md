@@ -108,6 +108,13 @@ Nota de uso para `HEX`:
 
 ### 📦 Descarga directa (GitHub Releases)
 
+Para que una persona que está aprendiendo pueda descargar la aplicación:
+
+1. Entra en la sección **Releases** del repositorio de GitHub.
+2. Abre la versión más reciente.
+3. En **Assets**, descarga `SerialMonitor-windows.exe`.
+4. Ejecuta el archivo; no necesita instalar Python ni dependencias.
+
 En cada release se publican ejecutables de un solo archivo:
 
 - **Windows:** `SerialMonitor-windows.exe`
@@ -119,6 +126,10 @@ La distribución de Windows queda validada como `dist/windows/SerialMonitor.exe`
 El workflow de GitHub Actions genera y publica automáticamente ese ejecutable
 como `SerialMonitor-windows.exe` junto con el paquete ZIP y su reporte de
 autoprueba.
+
+Después de subir cambios a `main`, crea una etiqueta de versión, por ejemplo
+`v1.0.0`, y súbela a GitHub para que el workflow publique automáticamente los
+archivos en **Releases**. Las instrucciones están en [`PUBLISH.md`](PUBLISH.md).
 
 Notas:
 - En Linux, dar permisos si hace falta: `chmod +x SerialMonitor-linux`
