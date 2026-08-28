@@ -115,6 +115,11 @@ En cada release se publican ejecutables de un solo archivo:
 
 Descarga desde **Releases** y ejecútalo directamente (sin instalar Python ni dependencias).
 
+La distribución de Windows queda validada como `dist/windows/SerialMonitor.exe`.
+El workflow de GitHub Actions genera y publica automáticamente ese ejecutable
+como `SerialMonitor-windows.exe` junto con el paquete ZIP y su reporte de
+autoprueba.
+
 Notas:
 - En Linux, dar permisos si hace falta: `chmod +x SerialMonitor-linux`
 - `config.json` es opcional; si no existe, la app usa valores por defecto
