@@ -118,7 +118,8 @@ jobs:
 
       - name: Flatten artifact folders
         run: |
-          find release -mindepth 2 -type f -name "SerialMonitor-*" -exec cp {} release/ \;
+          find release -mindepth 2 -type f -name "SerialMonitor-*" -exec mv {} release/ \;
+          find release -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
 
       - name: Generate checksums
         run: |
