@@ -1,5 +1,19 @@
 # Historial de Cambios
 
+## En desarrollo (2026-08-28) - Renovación de interfaz
+
+- Agregado un sistema visual centralizado para temas oscuro y claro, con
+  colores, espaciado, tipografía, superficies y estados consistentes.
+- Reorganizada la navegación como `Serial console` y `Protocol bridge`, con
+  títulos de contexto y pestañas SPI más compactas.
+- Las acciones primarias, destructivas y estados OK/ERROR/BUSY ahora tienen una
+  jerarquía visual común en UART, SPI, GPIO, memoria y pantallas.
+- Mejoradas tablas, encabezados, selección, scrollbars y formularios para una
+  lectura más rápida; las herramientas densas usan desplazamiento en ventanas
+  pequeñas en lugar de ocultar controles.
+- Simplificados textos, iconos decorativos y filas de acciones complejas sin
+  modificar los flujos de hardware.
+
 ## En desarrollo (2026-08-16) - Herramientas I²C avanzadas
 
 - Agregado `Transaction Lab` para Raw I²C, repeated START, SMBus y PEC CRC-8.

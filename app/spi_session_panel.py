@@ -21,6 +21,9 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QFrame,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -51,6 +54,7 @@ from .gpio_widget import GpioPanel
 from .gpio_worker import GpioWorker
 from .spi_display_widget import SpiDisplayWidget
 from .spi_display_worker import SpiDisplayWorker
+from .ui_theme import set_role, set_status
 
 
 OPERATION_LABELS = {
@@ -95,7 +99,20 @@ class SpiSessionPanel(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+        title = QLabel(f"SPI workspace · Interface {self.session_channel}")
+        title.setObjectName("pageTitle")
+        title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        root.addWidget(title)
+        subtitle = QLabel(
+            "Configure the bus once, then choose a focused tool below. "
+            "Every operation reports the bytes physically received from MISO."
+        )
+        subtitle.setObjectName("pageSubtitle")
+        subtitle.setWordWrap(True)
+        subtitle.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        root.addWidget(subtitle)
         root.addWidget(self._build_configuration())
 
         self.tabs = QTabWidget()
@@ -104,11 +121,11 @@ class SpiSessionPanel(QWidget):
         self.sequence_widget = SpiSequenceWidget()
         self.sequence_widget.run_requested.connect(self._run_sequence)
         self.sequence_widget.stop_btn.clicked.connect(self._stop_sequence)
-        self.tabs.addTab(self.sequence_widget, "Command sequences")
+        self.tabs.addTab(self.sequence_widget, "Sequences")
         self.register_widget = SpiRegisterWidget()
         self.register_widget.transaction_requested.connect(self._run_register_transaction)
         self._register_context = None
-        self.tabs.addTab(self.register_widget, "Register inspector")
+        self.tabs.addTab(self.register_widget, "Register")
         self.register_map_widget = SpiRegisterMapWidget()
         self.register_map_widget.read_requested.connect(self._run_register_map)
         self.register_map_widget.write_requested.connect(self._run_register_map_write)
@@ -116,7 +133,7 @@ class SpiSessionPanel(QWidget):
         self.tabs.addTab(self.register_map_widget, "Register map")
         self.memory_widget = SpiMemoryWidget()
         self.memory_widget.operation_requested.connect(self._run_memory_operation)
-        self.tabs.addTab(self.memory_widget, "Memory")
+        self.tabs.addTab(self._scrollable(self.memory_widget), "Memory")
         gpio_width = gpio_width_for_interface(self.bound_bridge, self._interface())
         self.gpio_widget = GpioPanel(
             title="Auxiliary GPIO shared with this SPI controller",
@@ -131,9 +148,28 @@ class SpiSessionPanel(QWidget):
             width=gpio_width,
         )
         self.display_widget.operation_requested.connect(self._run_display_operation)
-        self.tabs.addTab(self.display_widget, "SPI Display")
+        self.tabs.addTab(self._scrollable(self.display_widget), "Display")
         self.tabs.addTab(self._build_history_tab(), "History")
+        self.tabs.setDocumentMode(True)
+        tooltips = (
+            "Send one raw SPI operation", "Verify wiring or read JEDEC ID",
+            "Build repeatable command validations", "Inspect one device register",
+            "Work with a complete register map", "Read/program SPI memories",
+            "Control GPIO pins not reserved by SPI", "Initialize and test SPI displays",
+            "Review and export prior transactions",
+        )
+        for index, tooltip in enumerate(tooltips):
+            self.tabs.setTabToolTip(index, tooltip)
         root.addWidget(self.tabs, stretch=1)
+
+    @staticmethod
+    def _scrollable(widget):
+        """Keep dense expert tools usable on laptop-sized windows."""
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setWidget(widget)
+        return area
 
     def _build_configuration(self):
         box = QGroupBox("SPI master configuration")
@@ -202,7 +238,7 @@ class SpiSessionPanel(QWidget):
             "Connect GND between the adapter and target."
         )
         warning.setWordWrap(True)
-        warning.setStyleSheet("color:#D89000;")
+        warning.setProperty("role", "warning")
         grid.addWidget(warning, 3, 0, 1, 6)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
@@ -234,6 +270,7 @@ class SpiSessionPanel(QWidget):
         grid.addWidget(self.rx_length_spin, 2, 1)
 
         self.run_btn = QPushButton("Run transaction")
+        set_role(self.run_btn, "primary")
         self.run_btn.clicked.connect(self._run_custom_transaction)
         grid.addWidget(self.run_btn, 2, 4)
 
@@ -252,6 +289,7 @@ class SpiSessionPanel(QWidget):
         grid.addWidget(self.rx_ascii, 5, 1, 1, 4)
 
         self.status_label = QLabel("Ready.")
+        self.status_label.setProperty("role", "hint")
         self.status_label.setWordWrap(True)
         grid.addWidget(self.status_label, 6, 0, 1, 5)
         grid.setColumnStretch(3, 1)
@@ -271,6 +309,7 @@ class SpiSessionPanel(QWidget):
         self.loopback_edit = QLineEdit("00 FF AA 55 12 34 56 78")
         grid.addWidget(self.loopback_edit, 1, 1)
         self.loopback_btn = QPushButton("Run loopback")
+        set_role(self.loopback_btn, "primary")
         self.loopback_btn.clicked.connect(self._run_loopback)
         grid.addWidget(self.loopback_btn, 1, 2)
 
@@ -281,9 +320,11 @@ class SpiSessionPanel(QWidget):
         jedec_help.setWordWrap(True)
         grid.addWidget(jedec_help, 2, 0, 1, 3)
         self.jedec_btn = QPushButton("Read JEDEC ID")
+        set_role(self.jedec_btn, "primary")
         self.jedec_btn.clicked.connect(self._run_jedec)
         grid.addWidget(self.jedec_btn, 3, 2)
         self.quick_result = QLabel("No test run yet.")
+        self.quick_result.setProperty("role", "hint")
         self.quick_result.setWordWrap(True)
         grid.addWidget(self.quick_result, 4, 0, 1, 3)
         grid.setColumnStretch(1, 1)
@@ -436,6 +477,7 @@ class SpiSessionPanel(QWidget):
             self._show_result_error(str(exc))
             return
         self._set_busy(True)
+        set_status(self.status_label, "busy")
         self.status_label.setText(
             f"Running {OPERATION_LABELS[transaction.operation]}…"
         )
@@ -457,6 +499,7 @@ class SpiSessionPanel(QWidget):
             self.sequence_widget.status.setText(f"ERROR: {exc}")
             return
         self._set_busy(True)
+        set_status(self.status_label, "busy")
         self.sequence_widget.set_busy(True)
         url = f"{self.bound_bridge.base_url}/{self.session_interface}"
         self._worker = SpiSequenceWorker(
@@ -476,6 +519,10 @@ class SpiSessionPanel(QWidget):
         self.sequence_widget.set_busy(False)
         self.sequence_widget.show_result(result)
         self.status_label.setText(self.sequence_widget.status.text())
+        set_status(
+            self.status_label,
+            "ok" if result.get("status") in ("OK", "PASS") else "error",
+        )
         if any(item.get("physical_gpio") for item in result.get("steps", [])):
             self.quick_result.setText(self.sequence_widget.status.text())
         if self._shutting_down:
@@ -501,6 +548,7 @@ class SpiSessionPanel(QWidget):
         self._set_busy(False); self.sequence_widget.set_busy(False); self.memory_widget.set_busy(False)
         self.memory_widget.show_result(result)
         self.status_label.setText(self.memory_widget.status.text())
+        set_status(self.status_label, "ok" if result.get("status") == "OK" else "error")
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -563,6 +611,7 @@ class SpiSessionPanel(QWidget):
         self.gpio_widget.set_busy(False)
         self.gpio_widget.show_result(result)
         self.status_label.setText(self.gpio_widget.status.text())
+        set_status(self.status_label, "ok" if result.get("status") == "OK" else "error")
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -605,6 +654,7 @@ class SpiSessionPanel(QWidget):
         self.display_widget.set_busy(False)
         self.display_widget.show_result(result)
         self.status_label.setText(self.display_widget.status.text())
+        set_status(self.status_label, "ok" if result.get("status") == "OK" else "error")
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -634,6 +684,10 @@ class SpiSessionPanel(QWidget):
         if details:
             summary += f" — {details}"
         self.status_label.setText(summary)
+        set_status(
+            self.status_label,
+            "ok" if status in ("OK", "PASS") else "error",
+        )
         if result.get("operation") in ("loopback", "jedec"):
             self.quick_result.setText(summary)
         if self._register_context is not None:
@@ -752,6 +806,7 @@ class SpiSessionPanel(QWidget):
 
     def _show_result_error(self, message):
         self.status_label.setText(f"ERROR: {message}")
+        set_status(self.status_label, "error")
         self.quick_result.setText(f"ERROR: {message}")
 
     def _load_config(self):

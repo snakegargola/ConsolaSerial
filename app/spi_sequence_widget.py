@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 
 from .spi_bus import format_spi_hex, parse_spi_hex
 from .spi_sequence import SpiDeviceProfile, SpiSequenceStep, builtin_spi_profiles
+from .ui_theme import set_role, set_status
 
 
 OPERATIONS = ("write", "read", "write_read", "loopback", "delay")
@@ -33,6 +34,8 @@ class SpiSequenceWidget(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("Preset:"))
         self.preset_combo = QComboBox()
@@ -87,25 +90,32 @@ class SpiSequenceWidget(QWidget):
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch()
-        actions.addWidget(QLabel("Repeat:"))
-        self.repeat_spin = QSpinBox(); self.repeat_spin.setRange(1, 1000)
-        actions.addWidget(self.repeat_spin)
-        selected = QPushButton("Run selected")
-        selected.clicked.connect(self._run_selected)
-        actions.addWidget(selected)
-        self.run_btn = QPushButton("Run sequence")
-        self.run_btn.clicked.connect(self._run)
-        actions.addWidget(self.run_btn)
-        actions.addWidget(QLabel("Timeout:"))
-        self.timeout_spin = QSpinBox(); self.timeout_spin.setRange(1, 3600); self.timeout_spin.setValue(30); self.timeout_spin.setSuffix(" s")
-        actions.addWidget(self.timeout_spin)
-        self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False)
-        actions.addWidget(self.stop_btn)
         report = QPushButton("Export report")
         report.clicked.connect(self._export_report)
         actions.addWidget(report)
         root.addLayout(actions)
+
+        execution = QHBoxLayout()
+        execution.addStretch()
+        execution.addWidget(QLabel("Repeat:"))
+        self.repeat_spin = QSpinBox(); self.repeat_spin.setRange(1, 1000)
+        execution.addWidget(self.repeat_spin)
+        selected = QPushButton("Run selected")
+        selected.clicked.connect(self._run_selected)
+        execution.addWidget(selected)
+        self.run_btn = QPushButton("Run sequence")
+        set_role(self.run_btn, "primary")
+        self.run_btn.clicked.connect(self._run)
+        execution.addWidget(self.run_btn)
+        execution.addWidget(QLabel("Timeout:"))
+        self.timeout_spin = QSpinBox(); self.timeout_spin.setRange(1, 3600); self.timeout_spin.setValue(30); self.timeout_spin.setSuffix(" s")
+        execution.addWidget(self.timeout_spin)
+        self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False)
+        set_role(self.stop_btn, "danger")
+        execution.addWidget(self.stop_btn)
+        root.addLayout(execution)
         self.status = QLabel("Profiles are editable. Verify commands against the datasheet.")
+        self.status.setProperty("role", "hint")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
 
@@ -201,6 +211,7 @@ class SpiSequenceWidget(QWidget):
             steps = self._rows()
         except ValueError as exc:
             self.status.setText(f"INVALID: {exc}")
+            set_status(self.status, "error")
             return
         total = len(steps) * self.repeat_spin.value()
         self._set_banner(f"RUN #{self._run_number} RUNNING — 0/{total} completed", "#B7791F")
@@ -257,6 +268,7 @@ class SpiSequenceWidget(QWidget):
             f"{result.get('status', 'ERROR')}: {len(result.get('steps', []))} step(s), "
             f"{result.get('duration_ms', 0):.2f} ms — {result.get('error', '')}"
         )
+        set_status(self.status, "ok" if successful else "error")
 
     def _set_banner(self, text, color):
         self.result_banner.setText(text)
