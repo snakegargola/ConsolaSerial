@@ -58,9 +58,9 @@ class UsbBridgeCatalogTests(unittest.TestCase):
         self.assertIn("S/N 5WIGOU", bridge.label)
 
     def test_discovery_flushes_pyftdi_hotplug_cache(self):
-        with patch("pyftdi.usbtools.UsbTools.flush_cache") as flush_cache, patch(
-            "pyftdi.ftdi.Ftdi.list_devices", return_value=[]
-        ):
+        with patch("serial.tools.list_ports.comports", return_value=[]), patch(
+            "pyftdi.usbtools.UsbTools.flush_cache"
+        ) as flush_cache, patch("pyftdi.ftdi.Ftdi.list_devices", return_value=[]):
             self.assertEqual(discover_usb_bridges(), [])
         flush_cache.assert_called_once_with()
 
