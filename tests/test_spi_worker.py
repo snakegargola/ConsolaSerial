@@ -74,7 +74,7 @@ class SpiWorkerTests(unittest.TestCase):
         self.assertEqual(results[0]["actual_frequency"], 998_000)
         self.assertIn("manufacturer 0xEF", results[0]["details"])
 
-    def test_loopback_mismatch_is_a_test_failure_not_worker_error(self):
+    def test_transaction_worker_rejects_unsafe_loopback_path(self):
         _FakeController.response = b"\xAA\x00"
         results = []
         try:
@@ -87,8 +87,8 @@ class SpiWorkerTests(unittest.TestCase):
                 ).run()
         finally:
             _FakeController.response = b"\xEF\x40\x18"
-        self.assertEqual(results[0]["status"], "FAIL")
-        self.assertIn("Expected AA 55", results[0]["details"])
+        self.assertEqual(results[0]["status"], "INVALID")
+        self.assertIn("Physical loopback", results[0]["error"])
         self.assertTrue(_FakeController.instances[0].closed)
 
 

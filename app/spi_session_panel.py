@@ -40,6 +40,7 @@ from .spi_bus import (
 from .spi_worker import SpiTransactionWorker
 from .spi_sequence_widget import SpiSequenceWidget
 from .spi_sequence_worker import SpiSequenceWorker
+from .spi_sequence import SpiSequenceStep
 from .spi_memory_widget import SpiMemoryWidget
 from .spi_memory_worker import SpiMemoryWorker
 from .spi_register_widget import SpiRegisterWidget
@@ -51,7 +52,6 @@ OPERATION_LABELS = {
     "write": "Write",
     "read": "Read (dummy clocks)",
     "write_read": "Write → Read (same /CS)",
-    "duplex": "Full duplex",
     "loopback": "Loopback",
     "jedec": "JEDEC ID (0x9F)",
 }
@@ -188,7 +188,7 @@ class SpiSessionPanel(QWidget):
         grid = QGridLayout(tab)
         grid.addWidget(QLabel("Operation:"), 0, 0)
         self.operation_combo = QComboBox()
-        for operation in ("write", "read", "write_read", "duplex"):
+        for operation in ("write", "read", "write_read"):
             self.operation_combo.addItem(OPERATION_LABELS[operation], operation)
         self.operation_combo.currentIndexChanged.connect(self._update_operation_ui)
         grid.addWidget(self.operation_combo, 0, 1)
@@ -378,13 +378,15 @@ class SpiSessionPanel(QWidget):
         try:
             _settings, dummy = self._settings()
             payload = parse_spi_hex(self.loopback_edit.text(), allow_empty=False)
-            transaction = SpiTransaction(
-                "loopback", tx=payload, read_length=len(payload), dummy_byte=dummy
+            step = SpiSequenceStep(
+                "Physical loopback", "loopback", tx=payload,
+                read_length=len(payload), dummy_byte=dummy,
+                validation="equals", expected=payload,
             )
         except ValueError as exc:
             self.quick_result.setText(f"INVALID: {exc}")
             return
-        self._start_transaction(transaction)
+        self._run_sequence((step,))
 
     def _run_jedec(self):
         try:
@@ -449,6 +451,8 @@ class SpiSessionPanel(QWidget):
         self.sequence_widget.set_busy(False)
         self.sequence_widget.show_result(result)
         self.status_label.setText(self.sequence_widget.status.text())
+        if any(item.get("physical_gpio") for item in result.get("steps", [])):
+            self.quick_result.setText(self.sequence_widget.status.text())
         if self._shutting_down:
             self.channel_manager.release(self.session_channel, self._channel_owner)
 
@@ -605,8 +609,8 @@ class SpiSessionPanel(QWidget):
 
     def _update_operation_ui(self):
         operation = self.operation_combo.currentData()
-        needs_tx = operation in ("write", "write_read", "duplex")
-        needs_rx = operation in ("read", "write_read", "duplex")
+        needs_tx = operation in ("write", "write_read")
+        needs_rx = operation in ("read", "write_read")
         self.tx_edit.setEnabled(needs_tx)
         self.rx_length_spin.setEnabled(needs_rx)
         self.rx_length_label.setEnabled(needs_rx)

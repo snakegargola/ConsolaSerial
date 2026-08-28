@@ -44,8 +44,8 @@ MSB-first.
   conserva simultáneamente los bytes de MISO.
 - `Write → Read`: transmite el comando, mantiene `/CS` activo y luego genera
   los clocks de lectura. Es apropiado para muchos registros y memorias.
-- `Full duplex`: cada clock transmite un bit MOSI y recibe uno MISO. Si RX es
-  mayor que TX, completa MOSI con el byte dummy.
+- `Full duplex` genérico está deshabilitado: en el FT4232H probado, el comando
+  MPSSE devolvió un eco interno de TX aun con MISO físicamente desconectado.
 
 `MOSI on wire` muestra los bytes exactos que producirán reloj, incluidos los
 dummies. La respuesta se presenta en HEX y ASCII. Cada ejecución guarda hora,
@@ -55,7 +55,7 @@ CSV o JSON.
 ## Perfiles y secuencias de comandos
 
 `Command sequences` permite construir pruebas reproducibles sin modificar el
-código. Cada fila puede ser `Write`, `Read`, `Write → Read`, `Full duplex` o
+código. Cada fila puede ser `Write`, `Read`, `Write → Read`, `Loopback` o
 `Delay`, y conserva TX, longitud RX, byte dummy y espera posterior. La respuesta
 puede validarse por igualdad exacta, igualdad con máscara o rechazando respuestas
 completamente `00`/`FF`, útil para detectar un dispositivo desconectado.
@@ -151,7 +151,7 @@ adaptador e interfaz mediante la configuración del workspace USB Bridge.
 ### Loopback
 
 Desconecta primero el dispositivo bajo prueba y conecta `xDBUS1` (MOSI) con
-`xDBUS2` (MISO). `Run loopback` envía el patrón completo en full-duplex y marca
+`xDBUS2` (MISO). `Run loopback` envía el patrón con GPIO MPSSE y marca
 `PASS` sólo si cada byte recibido coincide. No verifica un esclavo SPI: verifica
 el adaptador, el reloj y la ruta de datos.
 

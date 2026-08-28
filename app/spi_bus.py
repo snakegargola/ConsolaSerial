@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 
 SPI_OPERATIONS = frozenset({
-    "write", "read", "write_read", "duplex", "loopback", "jedec",
+    "write", "read", "write_read", "loopback", "jedec",
 })
 SPI_MAX_PAYLOAD = 0xFF00  # PyFtdi's per-exchange payload limit.
 
@@ -69,8 +69,6 @@ class SpiTransaction:
             raise ValueError("SPI Read requires at least one RX byte.")
         if operation == "write_read" and (not tx or not read_length):
             raise ValueError("SPI Write then Read requires TX and RX bytes.")
-        if operation == "duplex" and not tx and not read_length:
-            raise ValueError("SPI Full Duplex requires TX or RX bytes.")
         if operation == "loopback" and not tx:
             raise ValueError("SPI Loopback requires a test pattern.")
         if operation == "jedec" and (not tx or not read_length):
@@ -91,7 +89,7 @@ class SpiTransaction:
             return dummy * int(self.read_length)
         if self.operation in ("write_read", "jedec"):
             return tx + dummy * int(self.read_length)
-        if self.operation in ("duplex", "loopback"):
+        if self.operation == "loopback":
             count = max(len(tx), int(self.read_length) or len(tx))
             return tx + dummy * (count - len(tx))
         raise ValueError(f"Unsupported SPI operation: {self.operation}")
@@ -100,8 +98,6 @@ class SpiTransaction:
     def expected_rx_length(self) -> int:
         if self.operation == "loopback":
             return len(self.tx)
-        if self.operation == "duplex":
-            return int(self.read_length) or len(self.tx)
         return int(self.read_length)
 
 
@@ -151,21 +147,18 @@ def execute_spi_transaction(port, transaction: SpiTransaction) -> bytes:
         port.write(tx, start=True, stop=True)
         return b""
     if operation == "read":
-        clocks = dummy * read_length
         return bytes(port.exchange(
-            clocks, read_length, start=True, stop=True, duplex=True
+            b"", read_length, start=True, stop=True, duplex=False
         ))
     if operation in ("write_read", "jedec"):
-        port.write(tx, start=True, stop=False)
-        clocks = dummy * read_length
         return bytes(port.exchange(
-            clocks, read_length, start=False, stop=True, duplex=True
+            tx, read_length, start=True, stop=True, duplex=False
         ))
-    if operation in ("duplex", "loopback"):
-        clocks = transaction.wire_tx
-        return bytes(port.exchange(
-            clocks, read_length, start=True, stop=True, duplex=True
-        ))
+    if operation == "loopback":
+        raise ValueError(
+            "Physical loopback must use the GPIO sampling worker; the generic "
+            "full-duplex command can echo TX instead of sampling MISO."
+        )
     raise ValueError(f"Unsupported SPI operation: {operation}")
 
 
