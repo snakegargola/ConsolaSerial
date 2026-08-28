@@ -42,6 +42,7 @@ SerialPython/
 │   ├── spi_register_map_widget.py # Editor, polling y exportación CSV
 │   ├── display_image_converter.py # Imágenes monocromáticas SSD1306
 │   ├── config_manager.py        # Gestión de configuración (JSON)
+│   ├── ui_theme.py              # Sistema visual y roles semánticos compartidos
 │   └── log_manager.py           # Gestión de logs
 ├── assets/                      # Recursos (iconos, imágenes)
 ├── scripts/                     # Scripts de compilación
@@ -89,6 +90,11 @@ SerialPython/
 - Alertas por patrones regex
 - Búsqueda literal y navegación de coincidencias
 - Estadísticas de transferencia
+
+La presentación global vive en `ui_theme.py`. Los widgets declaran roles
+semánticos como `primary`, `danger`, `hint` o estados `ok/error/busy`; no deben
+duplicar paletas o colores de protocolo. Esto permite modificar ambos temas sin
+tocar la lógica UART, I²C, SPI o GPIO.
 
 ### 3. **app/serial_worker.py**
 **Responsabilidades:**

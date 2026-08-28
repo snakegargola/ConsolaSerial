@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QAbstractItemView, QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .gpio_bus import GPIO_PORT_WIDTH, GpioState, mask_for_width
+from .ui_theme import set_role, set_status
 
 
 class GpioPanel(QWidget):
@@ -33,16 +34,21 @@ class GpioPanel(QWidget):
 
     def _build_ui(self, title):
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
         info = QGroupBox(title)
         info_layout = QGridLayout(info)
         self.description = QLabel()
+        self.description.setProperty("role", "hint")
         self.description.setWordWrap(True)
         info_layout.addWidget(self.description, 0, 0)
         root.addWidget(info)
 
         self.table = QTableWidget(self.width, 4)
         self.table.setHorizontalHeaderLabels(("Pin", "Direction", "Output", "Read"))
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.verticalHeader().setVisible(False)
         for pin in range(self.width):
             pin_item = QTableWidgetItem(f"{self.pin_prefix}{pin}")
             pin_item.setFlags(
@@ -69,20 +75,23 @@ class GpioPanel(QWidget):
 
         actions = QHBoxLayout()
         self.apply_btn = QPushButton("Apply outputs and read")
+        set_role(self.apply_btn, "primary")
         self.apply_btn.clicked.connect(lambda: self._emit_operation(True))
         actions.addWidget(self.apply_btn)
-        self.read_btn = QPushButton("Read inputs")
+        self.read_btn = QPushButton("Sample pins")
         self.read_btn.clicked.connect(lambda: self._emit_operation(False))
         actions.addWidget(self.read_btn)
         all_inputs = QPushButton("All inputs")
         all_inputs.clicked.connect(self._all_inputs)
         actions.addWidget(all_inputs)
         outputs_low = QPushButton("Outputs low")
+        set_role(outputs_low, "danger")
         outputs_low.clicked.connect(self._outputs_low)
         actions.addWidget(outputs_low)
         actions.addStretch()
         root.addLayout(actions)
         self.status = QLabel("Ready.")
+        self.status.setProperty("role", "hint")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
 
@@ -126,6 +135,7 @@ class GpioPanel(QWidget):
     def show_result(self, result):
         if result.get("status") != "OK":
             self.status.setText(f"ERROR: {result.get('error', 'GPIO operation failed')}")
+            set_status(self.status, "error")
             return
         sampled = int(result.get("sampled", 0))
         direction = int(result.get("direction", 0))
@@ -138,6 +148,7 @@ class GpioPanel(QWidget):
             f"OK — sampled 0x{sampled:0{max(2, (self.width + 3) // 4)}X} "
             f"in {result.get('duration_ms', 0.0):.2f} ms"
         )
+        set_status(self.status, "ok")
 
     def set_busy(self, busy):
         self.apply_btn.setEnabled(not busy)
@@ -148,7 +159,10 @@ class GpioPanel(QWidget):
             state = self.state()
         except ValueError as exc:
             self.status.setText(f"INVALID: {exc}")
+            set_status(self.status, "error")
             return
+        set_status(self.status, "busy")
+        self.status.setText("Applying GPIO configuration and sampling physical pins…")
         self.operation_requested.emit(state, write_outputs)
 
     def _direction_changed(self, pin):

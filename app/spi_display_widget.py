@@ -16,6 +16,7 @@ from .spi_display import (
     color_bars_rgb565, format_init_script, load_image_rgb565,
     parse_init_script, solid_rgb565,
 )
+from .ui_theme import set_role, set_status
 
 
 class SpiDisplayWidget(QWidget):
@@ -35,7 +36,8 @@ class SpiDisplayWidget(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
         config_box = QGroupBox("SPI display quick validation")
         grid = QGridLayout(config_box)
         grid.addWidget(QLabel("Profile:"), 0, 0)
@@ -104,9 +106,11 @@ class SpiDisplayWidget(QWidget):
         self.reset_btn.clicked.connect(lambda: self._request("reset"))
         row.addWidget(self.reset_btn)
         self.init_btn = QPushButton("Initialize")
+        set_role(self.init_btn, "primary")
         self.init_btn.clicked.connect(lambda: self._request("initialize"))
         row.addWidget(self.init_btn)
         self.bars_btn = QPushButton("Init + color bars")
+        set_role(self.bars_btn, "primary")
         self.bars_btn.clicked.connect(lambda: self._request_pattern("bars"))
         row.addWidget(self.bars_btn)
         self.checker_btn = QPushButton("Checkerboard")
@@ -121,9 +125,11 @@ class SpiDisplayWidget(QWidget):
         root.addWidget(actions)
 
         self.wiring = QLabel()
+        self.wiring.setProperty("role", "hint")
         self.wiring.setWordWrap(True)
         root.addWidget(self.wiring)
         self.status = QLabel("Ready. Start with Hardware reset, then Initialize.")
+        self.status.setProperty("role", "hint")
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         root.addStretch()
@@ -211,6 +217,7 @@ class SpiDisplayWidget(QWidget):
     def show_result(self, result):
         if result.get("status") != "OK":
             self.status.setText(f"ERROR: {result.get('error', 'Display operation failed')}")
+            set_status(self.status, "error")
             return
         count = int(result.get("bytes_sent", 0))
         detail = f", {count} framebuffer bytes" if count else ""
@@ -219,6 +226,7 @@ class SpiDisplayWidget(QWidget):
             f"{result.get('actual_frequency', 0):g} Hz, "
             f"{result.get('duration_ms', 0.0):.2f} ms"
         )
+        set_status(self.status, "ok")
 
     def set_busy(self, busy):
         for button in self._action_buttons():
@@ -250,7 +258,10 @@ class SpiDisplayWidget(QWidget):
             }
         except ValueError as exc:
             self.status.setText(f"INVALID: {exc}")
+            set_status(self.status, "error")
             return
+        set_status(self.status, "busy")
+        self.status.setText(f"Preparing display action: {action}…")
         self.operation_requested.emit(request)
 
     def _request_pattern(self, pattern):

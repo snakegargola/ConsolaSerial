@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 
 from .spi_bus import parse_spi_hex
 from .spi_memory import SpiMemoryGeometry, format_hex_dump
+from .ui_theme import set_role, set_status
 
 
 class SpiMemoryWidget(QWidget):
@@ -20,6 +21,8 @@ class SpiMemoryWidget(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
         config = QGroupBox("Memory geometry and commands")
         form = QFormLayout(config)
         self.kind = QComboBox(); self.kind.addItems(("SPI NOR", "25xx EEPROM", "SPI FRAM"))
@@ -56,13 +59,19 @@ class SpiMemoryWidget(QWidget):
         compare = QPushButton("Compare BIN"); compare.clicked.connect(self._compare_bin)
         edit = QPushButton("Edit buffer HEX"); edit.clicked.connect(self._edit_buffer)
         save = QPushButton("Save buffer BIN"); save.clicked.connect(self._save_bin)
-        for column, button in enumerate((identify, status, read, load, edit, program, erase, compare, save)):
+        set_role(identify, "primary"); set_role(read, "primary")
+        set_role(program, "danger"); set_role(erase, "danger")
+        for column, button in enumerate((identify, status, read, compare, save)):
             controls.addWidget(button, 1, column)
+        for column, button in enumerate((load, edit, program, erase)):
+            controls.addWidget(button, 2, column)
         self._buttons = (identify, status, read, load, edit, program, erase, compare, save)
         root.addLayout(controls)
         self.viewer = QTextEdit(); self.viewer.setReadOnly(True); self.viewer.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         root.addWidget(self.viewer, 1)
         self.status = QLabel("Read first. Programming and erase always require confirmation.")
+        self.status.setProperty("role", "hint")
+        self.status.setWordWrap(True)
         root.addWidget(self.status)
 
     def geometry(self):
@@ -96,7 +105,9 @@ class SpiMemoryWidget(QWidget):
                     QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
                 return
             self.operation_requested.emit(action, geometry, request)
-        except ValueError as exc: self.status.setText(f"INVALID: {exc}")
+        except ValueError as exc:
+            self.status.setText(f"INVALID: {exc}")
+            set_status(self.status, "error")
 
     def _load_bin(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load memory image", "", "Binary (*.bin);;All files (*)")
@@ -169,16 +180,19 @@ class SpiMemoryWidget(QWidget):
                                 f"{item['manufacturer_id']:02X} {item['memory_type']:02X} "
                                 f"{item['capacity_code']:02X}; SFDP: {'yes' if sfdp else 'no'} — "
                                 f"{result.get('details', '')}")
+            set_status(self.status, "ok" if result.get("status") == "OK" else "error")
         elif action == "status" and result.get("status_register"):
             item = result["status_register"]
             self.status.setText(f"Status 0x{item['raw']:02X}: BUSY={item['busy']}, "
                                 f"WEL={item['write_enabled']}, protected={item['protected']} "
                                 f"(bits 0x{item['protection_bits']:02X})")
+            set_status(self.status, "ok")
         else:
             if data:
                 self._buffer = data; self._base_address = result.get("address", self._base_address)
                 self.viewer.setPlainText(format_hex_dump(data, self._base_address))
             self.status.setText(f"{result.get('status')}: {result.get('details') or result.get('error') or ''}")
+            set_status(self.status, "ok" if result.get("status") == "OK" else "error")
 
     def set_busy(self, busy):
         for button in self._buttons: button.setEnabled(not busy)

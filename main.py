@@ -39,11 +39,16 @@ def run_self_test(arguments):
 
 
 def main():
+    from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
     from app.config_manager import ConfigManager
     from app.serial_monitor import SerialMonitorApp
 
     app = QApplication(sys.argv)
+    app.setApplicationName("Consola Serial")
+    app.setOrganizationName("Embedded Systems")
+    app.setStyle("Fusion")
+    app.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     config = ConfigManager()
     window = SerialMonitorApp(config)
     window.show()

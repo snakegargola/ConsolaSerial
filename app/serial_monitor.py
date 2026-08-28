@@ -43,6 +43,7 @@ from .serial_payload import encode_serial_payload, format_payload_preview
 from .uart_tools_widget import UartToolsPanel
 from .spi_session_panel import SpiSessionPanel
 from .gpio_session_panel import GpioSessionPanel
+from .ui_theme import contrast_text, set_role, stylesheet
 from .bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
@@ -172,9 +173,11 @@ class SerialMonitorApp(QMainWindow):
         self._color_bg = self.config.get("color_bg", "#1C1C1C")
 
         self.setWindowTitle("Serial Monitor — Embedded Systems")
-        self.resize(1150, 800)
+        self.setMinimumSize(1080, 700)
+        self.resize(1440, 900)
         self._build_ui()
         self._load_config_into_ui()
+        self._polish_widget_tree()
         self._setup_shortcuts()
         if self._manages_usb_bridges:
             self._bridge_monitor_timer = QTimer(self)
@@ -189,12 +192,14 @@ class SerialMonitorApp(QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
+        central.setObjectName("appSurface")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setSpacing(4)
         root.setContentsMargins(6, 6, 6, 4)
         root.addWidget(self._build_usb_bridge_mode_panel())
         self.main_tabs = QTabWidget()
+        self.main_tabs.setDocumentMode(True)
         root.addWidget(self.main_tabs, stretch=1)
 
         serial_tab = QWidget()
@@ -206,7 +211,6 @@ class SerialMonitorApp(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(10)
-        splitter.setStyleSheet("QSplitter::handle { background-color: #3a3a3a; }")
         self.main_splitter = splitter
         sequence = self._build_sequence_panel()
         sequence.setMinimumWidth(320)
@@ -225,15 +229,16 @@ class SerialMonitorApp(QMainWindow):
         splitter.setSizes([width, 900])
         serial_root.addWidget(splitter, stretch=1)
 
-        self.main_tabs.addTab(serial_tab, "USB Serial / General")
-        self.main_tabs.addTab(self._build_usb_bridge_workspace(), "USB Bridge")
+        self.main_tabs.addTab(serial_tab, "Serial console")
+        self.main_tabs.addTab(self._build_usb_bridge_workspace(), "Protocol bridge")
         self._build_status_bar()
         self.main_tabs.currentChanged.connect(
             lambda index: self.statusBar().setVisible(index == 0)
         )
 
     def _build_usb_bridge_mode_panel(self):
-        box = QGroupBox("USB protocol bridge — detected capabilities")
+        box = QGroupBox("USB protocol bridge")
+        box.setToolTip("Select one physical bridge and assign a protocol to each independent interface.")
         outer = QVBoxLayout(box)
         selector = QHBoxLayout()
         selector.addWidget(QLabel("Adapter:"))
@@ -244,7 +249,7 @@ class SerialMonitorApp(QMainWindow):
             message = self.usb_bridge_detection_error or "No supported adapter detected"
             self.usb_bridge_combo.addItem(message, None)
         selector.addWidget(self.usb_bridge_combo, stretch=1)
-        self.usb_bridge_refresh_btn = QPushButton("Refresh adapters")
+        self.usb_bridge_refresh_btn = QPushButton("Refresh")
         self.usb_bridge_refresh_btn.clicked.connect(
             lambda: self._refresh_usb_bridges(manual=True)
         )
@@ -266,10 +271,16 @@ class SerialMonitorApp(QMainWindow):
         """Create sessions from the interfaces advertised by the adapter."""
         workspace = QWidget()
         root = QVBoxLayout(workspace)
+        root.setContentsMargins(10, 10, 10, 10)
+        header = QLabel("Protocol bridge workspace")
+        header.setObjectName("pageTitle")
+        root.addWidget(header)
         self.usb_bridge_note = QLabel()
+        self.usb_bridge_note.setObjectName("pageSubtitle")
         self.usb_bridge_note.setWordWrap(True)
         root.addWidget(self.usb_bridge_note)
         self.usb_bridge_channel_tabs = QTabWidget()
+        self.usb_bridge_channel_tabs.setDocumentMode(True)
         root.addWidget(self.usb_bridge_channel_tabs, stretch=1)
         self._rebuild_usb_bridge_workspace()
         return workspace
@@ -408,6 +419,7 @@ class SerialMonitorApp(QMainWindow):
             self.usb_bridge_channel_tabs.addTab(page, f"Interface {channel}")
         self.usb_bridge_modes_layout.addStretch()
         self._apply_usb_bridge_workspace_modes(show_error=False)
+        self._polish_widget_tree()
 
     def _apply_usb_bridge_workspace_modes(self, show_error=True):
         """Switch a panel only when its outgoing session is idle."""
@@ -501,7 +513,7 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_retry_count.setValue(3)
         grid.addWidget(self.i2c_retry_count, 1, 6)
         addressing = QLabel("Device addressing: 7-bit")
-        addressing.setStyleSheet("font-weight:bold; color:#2E8B57;")
+        addressing.setProperty("role", "hint")
         grid.addWidget(addressing, 2, 0, 1, 7)
         root.addWidget(config_box)
 
@@ -619,7 +631,7 @@ class SerialMonitorApp(QMainWindow):
             "may produce no image or unexpected commands."
         )
         warning.setWordWrap(True)
-        warning.setStyleSheet("color:#CC8800;")
+        warning.setProperty("role", "warning")
         display.addWidget(warning, 4, 0, 1, 6)
         display.addWidget(QLabel("Text:"), 5, 0)
         self.i2c_display_text = QLineEdit("Hello I2C")
@@ -831,46 +843,46 @@ class SerialMonitorApp(QMainWindow):
 
         # Row 0 - Port and communication settings
         r = 0
-        port_label = lbl("Port: 🔹")
+        port_label = lbl("Port:")
         port_label.setToolTip(tooltips["port"])
         grid.addWidget(port_label, r, 0)
         self.port_combo = combo([], 110)
         self.port_combo.setToolTip(tooltips["port"])
         grid.addWidget(self.port_combo, r, 1)
-        btn_refresh = QPushButton("⟳"); btn_refresh.setFixedWidth(28)
+        btn_refresh = QPushButton("Refresh"); btn_refresh.setMinimumWidth(68)
         btn_refresh.setToolTip("Refresh available ports")
         btn_refresh.clicked.connect(self._refresh_ports)
         grid.addWidget(btn_refresh, r, 2)
 
-        baud_label = lbl("Baud: 🔹")
+        baud_label = lbl("Baud:")
         baud_label.setToolTip(tooltips["baud"])
         grid.addWidget(baud_label, r, 3)
         self.baud_combo = combo(BAUD_RATES, 100)
         self.baud_combo.setToolTip(tooltips["baud"])
         grid.addWidget(self.baud_combo, r, 4)
 
-        data_label = lbl("Data: 🔹")
+        data_label = lbl("Data:")
         data_label.setToolTip(tooltips["data"])
         grid.addWidget(data_label, r, 5)
         self.databits_combo = combo(DATA_BITS, 55)
         self.databits_combo.setToolTip(tooltips["data"])
         grid.addWidget(self.databits_combo, r, 6)
 
-        parity_label = lbl("Parity: 🔹")
+        parity_label = lbl("Parity:")
         parity_label.setToolTip(tooltips["parity"])
         grid.addWidget(parity_label, r, 7)
         self.parity_combo = combo(PARITIES, 80)
         self.parity_combo.setToolTip(tooltips["parity"])
         grid.addWidget(self.parity_combo, r, 8)
 
-        stop_label = lbl("Stop: 🔹")
+        stop_label = lbl("Stop:")
         stop_label.setToolTip(tooltips["stop"])
         grid.addWidget(stop_label, r, 9)
         self.stopbits_combo = combo(STOP_BITS, 55)
         self.stopbits_combo.setToolTip(tooltips["stop"])
         grid.addWidget(self.stopbits_combo, r, 10)
 
-        flow_label = lbl("Flow: 🔹")
+        flow_label = lbl("Flow:")
         flow_label.setToolTip(tooltips["flow"])
         grid.addWidget(flow_label, r, 11)
         self.flow_combo = combo(FLOW_CTRL, 90)
@@ -879,28 +891,28 @@ class SerialMonitorApp(QMainWindow):
 
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.setFixedWidth(100)
-        self.connect_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(self.connect_btn, "primary")
         self.connect_btn.setToolTip("Establish or close serial connection")
         self.connect_btn.clicked.connect(self._toggle_connection)
         grid.addWidget(self.connect_btn, r, 13, 1, 2)
 
         # Row 1 - EOL, Display options, and Colors
         r = 1
-        eol_tx_label = lbl("EOL TX: 🔹")
+        eol_tx_label = lbl("EOL TX:")
         eol_tx_label.setToolTip(tooltips["eol_tx"])
         grid.addWidget(eol_tx_label, r, 0)
         self.eol_tx_combo = combo(EOL_OPT, 80)
         self.eol_tx_combo.setToolTip(tooltips["eol_tx"])
         grid.addWidget(self.eol_tx_combo, r, 1)
 
-        eol_rx_label = lbl("EOL RX: 🔹")
+        eol_rx_label = lbl("EOL RX:")
         eol_rx_label.setToolTip(tooltips["eol_rx"])
         grid.addWidget(eol_rx_label, r, 3)
         self.eol_rx_combo = combo(EOL_OPT, 80)
         self.eol_rx_combo.setToolTip(tooltips["eol_rx"])
         grid.addWidget(self.eol_rx_combo, r, 4)
 
-        show_label = lbl("Show: 🔹")
+        show_label = lbl("Display:")
         show_label.setToolTip("Select display formats for received data")
         grid.addWidget(show_label, r, 5)
         self.chk_ascii = QCheckBox("ASCII"); self.chk_ascii.setChecked(True)
@@ -913,7 +925,7 @@ class SerialMonitorApp(QMainWindow):
         grid.addWidget(self.chk_hex,   r, 7)
         grid.addWidget(self.chk_ts,    r, 8)
 
-        colors_label = lbl("Colors: 🔹")
+        colors_label = lbl("Colors:")
         colors_label.setToolTip("Click buttons to customize display colors")
         grid.addWidget(colors_label, r, 9)
         self.btn_crx = QPushButton("RX"); self.btn_crx.setFixedWidth(44)
@@ -933,8 +945,8 @@ class SerialMonitorApp(QMainWindow):
         grid.addWidget(self.btn_cbg, r, 12)
 
         # Theme toggle
-        self.theme_btn = QPushButton("☀ Light")
-        self.theme_btn.setFixedWidth(80)
+        self.theme_btn = QPushButton("Light theme")
+        self.theme_btn.setMinimumWidth(104)
         self.theme_btn.setToolTip("Toggle between light and dark theme")
         self.theme_btn.clicked.connect(self._toggle_theme)
         grid.addWidget(self.theme_btn, r, 13)
@@ -1025,9 +1037,9 @@ class SerialMonitorApp(QMainWindow):
         
         # Export/Import buttons
         export_layout = QHBoxLayout()
-        btn_export = QPushButton("📤 Export")
+        btn_export = QPushButton("Export")
         btn_export.clicked.connect(self._export_sequence)
-        btn_import = QPushButton("📥 Import")
+        btn_import = QPushButton("Import")
         btn_import.clicked.connect(self._import_sequence)
         export_layout.addWidget(btn_export)
         export_layout.addWidget(btn_import)
@@ -1035,7 +1047,7 @@ class SerialMonitorApp(QMainWindow):
         
         # Start/Stop button
         self.seq_start_btn = QPushButton("Start Sequence")
-        self.seq_start_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(self.seq_start_btn, "primary")
         self.seq_start_btn.clicked.connect(self._toggle_sequence)
         vbox.addWidget(self.seq_start_btn)
 
@@ -1068,7 +1080,7 @@ class SerialMonitorApp(QMainWindow):
         
         # Search bar
         search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("🔍 Search:"))
+        search_layout.addWidget(QLabel("Search:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Type text to find...")
         self.search_edit.setClearButtonEnabled(True)
@@ -1090,7 +1102,7 @@ class SerialMonitorApp(QMainWindow):
         
         # Alert management
         alert_layout = QHBoxLayout()
-        alert_layout.addWidget(QLabel("🔔 Alerts:"))
+        alert_layout.addWidget(QLabel("Alerts:"))
         btn_manage_alerts = QPushButton("Manage Alerts")
         btn_manage_alerts.clicked.connect(self._manage_alerts)
         alert_layout.addWidget(btn_manage_alerts)
@@ -1149,7 +1161,7 @@ class SerialMonitorApp(QMainWindow):
         grid.addWidget(self.interval_spin, 2, 2)
 
         self.auto_btn = QPushButton("Start Auto"); self.auto_btn.setFixedWidth(100)
-        self.auto_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(self.auto_btn, "primary")
         self.auto_btn.clicked.connect(self._toggle_auto_send)
         grid.addWidget(self.auto_btn, 2, 3)
 
@@ -1203,6 +1215,8 @@ class SerialMonitorApp(QMainWindow):
         self._alerts = self.config.get("alerts", [])
         if self.config.get("theme", "dark") == "light":
             self._apply_light_theme()
+        else:
+            self._apply_dark_theme()
         self._apply_usb_bridge_workspace_modes(show_error=False)
 
     def _collect_config(self):
@@ -2608,7 +2622,7 @@ class SerialMonitorApp(QMainWindow):
                     self.worker, self.flow_combo.currentText()
                 )
             self.connect_btn.setText("Disconnect")
-            self.connect_btn.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
+            set_role(self.connect_btn, "danger")
             self.led_lbl.setStyleSheet("color:#00FF7F; font-size:18px;")
             self.conn_lbl.setText(f"Connected — {self.port_combo.currentText()}")
         else:
@@ -2624,9 +2638,9 @@ class SerialMonitorApp(QMainWindow):
             self.worker = None
         self._auto_timer.stop()
         self.auto_btn.setText("Start Auto")
-        self.auto_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(self.auto_btn, "primary")
         self.connect_btn.setText("Connect")
-        self.connect_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(self.connect_btn, "primary")
         self.led_lbl.setStyleSheet("color:#555555; font-size:18px;")
         self.conn_lbl.setText("Disconnected")
 
@@ -2754,7 +2768,7 @@ class SerialMonitorApp(QMainWindow):
         if self._auto_timer.isActive():
             self._auto_timer.stop()
             self.auto_btn.setText("Start Auto")
-            self.auto_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+            set_role(self.auto_btn, "primary")
         else:
             if not self.worker or not self.worker.is_connected:
                 QMessageBox.warning(self, "Not Connected", "Connect first.")
@@ -2762,7 +2776,7 @@ class SerialMonitorApp(QMainWindow):
             ms = int(self.interval_spin.value() * 1000)
             self._auto_timer.start(ms)
             self.auto_btn.setText("Stop Auto")
-            self.auto_btn.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
+            set_role(self.auto_btn, "danger")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Command Sequence
@@ -2792,7 +2806,7 @@ class SerialMonitorApp(QMainWindow):
         # Send button column
         btn_send = QPushButton("▶")
         btn_send.setFixedSize(28, 25)
-        btn_send.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(btn_send, "success")
         btn_send.clicked.connect(lambda: self._send_sequence_command_manual(row))
         self.seq_table.setCellWidget(row, 3, btn_send)
         
@@ -2816,7 +2830,7 @@ class SerialMonitorApp(QMainWindow):
         # Delete button column
         btn_delete = QPushButton("✕")
         btn_delete.setFixedSize(30, 25)
-        btn_delete.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
+        set_role(btn_delete, "danger")
         btn_delete.clicked.connect(lambda: self._remove_sequence_command(row))
         self.seq_table.setCellWidget(row, 5, btn_delete)
     
@@ -2931,7 +2945,7 @@ class SerialMonitorApp(QMainWindow):
         self._sequence_running = True
         self._sequence_index = 0
         self.seq_start_btn.setText("Stop Sequence")
-        self.seq_start_btn.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
+        set_role(self.seq_start_btn, "danger")
         
         # Send first command immediately
         self._send_sequence_command(self._sequence_index)
@@ -2945,7 +2959,7 @@ class SerialMonitorApp(QMainWindow):
         self._sequence_running = False
         self._sequence_timer.stop()
         self.seq_start_btn.setText("Start Sequence")
-        self.seq_start_btn.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+        set_role(self.seq_start_btn, "primary")
         self._clear_sequence_highlight()
     
     def _send_next_sequence_cmd(self):
@@ -3103,7 +3117,7 @@ class SerialMonitorApp(QMainWindow):
             # Send button column
             btn_send = QPushButton("▶")
             btn_send.setFixedSize(28, 25)
-            btn_send.setStyleSheet("background:#2E8B57; color:white; font-weight:bold;")
+            set_role(btn_send, "success")
             btn_send.clicked.connect(lambda checked, r=row: self._send_sequence_command_manual(r))
             self.seq_table.setCellWidget(row, 3, btn_send)
             
@@ -3127,7 +3141,7 @@ class SerialMonitorApp(QMainWindow):
             # Delete button column
             btn_delete = QPushButton("✕")
             btn_delete.setFixedSize(30, 25)
-            btn_delete.setStyleSheet("background:#8B0000; color:white; font-weight:bold;")
+            set_role(btn_delete, "danger")
             btn_delete.clicked.connect(lambda checked, r=row: self._remove_sequence_command(r))
             self.seq_table.setCellWidget(row, 5, btn_delete)
     
@@ -3387,7 +3401,7 @@ class SerialMonitorApp(QMainWindow):
         button_layout = QHBoxLayout()
         
         btn_add = QPushButton("+ Add Alert")
-        btn_add.setStyleSheet("background:#2E8B57; color:white;")
+        set_role(btn_add, "success")
         def add_alert():
             pattern = pattern_input.text().strip()
             if not pattern:
@@ -3422,7 +3436,7 @@ class SerialMonitorApp(QMainWindow):
         button_layout.addWidget(btn_add)
         
         btn_delete = QPushButton("🗑 Delete Selected")
-        btn_delete.setStyleSheet("background:#8B0000; color:white;")
+        set_role(btn_delete, "danger")
         def delete_alert():
             current = self.alerts_list.currentRow()
             if current < 0:
@@ -3434,8 +3448,8 @@ class SerialMonitorApp(QMainWindow):
         btn_delete.clicked.connect(delete_alert)
         button_layout.addWidget(btn_delete)
         
-        btn_save = QPushButton("💾 Save Configuration")
-        btn_save.setStyleSheet("background:#4682B4; color:white;")
+        btn_save = QPushButton("Save configuration")
+        set_role(btn_save, "primary")
         def save_alerts():
             self.config.set("alerts", self._alerts)
             if self.config.save():
@@ -3590,10 +3604,7 @@ class SerialMonitorApp(QMainWindow):
             self._apply_monitor_bg(hex_color)
 
     def _apply_color_btn(self, btn: QPushButton, color: str):
-        # Pick contrasting text color
-        c = QColor(color)
-        lum = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
-        fg = "#000000" if lum > 128 else "#ffffff"
+        fg = contrast_text(color)
         btn.setStyleSheet(f"background:{color}; color:{fg}; font-weight:bold;")
 
     def _apply_monitor_bg(self, color: str):
@@ -3608,38 +3619,36 @@ class SerialMonitorApp(QMainWindow):
     def _toggle_theme(self):
         if self._dark_mode:
             self._apply_light_theme()
-            self.theme_btn.setText("🌙 Dark")
-            self._dark_mode = False
             self.config.set("theme", "light")
         else:
             self._apply_dark_theme()
-            self.theme_btn.setText("☀ Light")
-            self._dark_mode = True
             self.config.set("theme", "dark")
 
     def _apply_dark_theme(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget { background:#2b2b2b; color:#e0e0e0; }
-            QGroupBox { border:1px solid #555; margin-top:6px; color:#e0e0e0; }
-            QGroupBox::title { subcontrol-origin:margin; left:8px; }
-            QComboBox, QLineEdit, QDoubleSpinBox { background:#3c3c3c; color:#e0e0e0; border:1px solid #555; }
-            QPushButton { background:#444; color:#e0e0e0; border:1px solid #666; padding:2px 6px; }
-            QPushButton:hover { background:#555; }
-            QCheckBox { color:#e0e0e0; }
-            QLabel { color:#e0e0e0; }
-        """)
+        self.setStyleSheet(stylesheet("dark"))
+        self._dark_mode = True
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.setText("Light theme")
 
     def _apply_light_theme(self):
-        self.setStyleSheet("""
-            QMainWindow, QWidget { background:#f0f0f0; color:#1a1a1a; }
-            QGroupBox { border:1px solid #aaa; margin-top:6px; color:#1a1a1a; }
-            QGroupBox::title { subcontrol-origin:margin; left:8px; }
-            QComboBox, QLineEdit, QDoubleSpinBox { background:#ffffff; color:#1a1a1a; border:1px solid #aaa; }
-            QPushButton { background:#e0e0e0; color:#1a1a1a; border:1px solid #aaa; padding:2px 6px; }
-            QPushButton:hover { background:#d0d0d0; }
-            QCheckBox { color:#1a1a1a; }
-            QLabel { color:#1a1a1a; }
-        """)
+        self.setStyleSheet(stylesheet("light"))
+        self._dark_mode = False
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.setText("Dark theme")
+
+    def _polish_widget_tree(self):
+        """Apply usability defaults to static and dynamically-created panels."""
+        for table in self.findChildren(QTableWidget):
+            table.setAlternatingRowColors(True)
+            table.setShowGrid(False)
+            table.setWordWrap(False)
+            table.verticalHeader().setDefaultSectionSize(34)
+            table.horizontalHeader().setMinimumHeight(34)
+        for tabs in self.findChildren(QTabWidget):
+            tabs.setDocumentMode(True)
+            tabs.tabBar().setExpanding(False)
+            tabs.tabBar().setUsesScrollButtons(True)
+            tabs.tabBar().setDrawBase(False)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Helpers
