@@ -64,6 +64,32 @@ class UsbBridgeCatalogTests(unittest.TestCase):
             self.assertEqual(discover_usb_bridges(), [])
         flush_cache.assert_called_once_with()
 
+    def test_non_ftdi_serial_adapter_skips_pyftdi_scan(self):
+        generic_uart = SimpleNamespace(vid=0x1A86, pid=0x7523)
+        with patch(
+            "serial.tools.list_ports.comports", return_value=[generic_uart]
+        ), patch("pyftdi.ftdi.Ftdi.list_devices") as list_devices:
+            self.assertEqual(discover_usb_bridges(), [])
+        list_devices.assert_not_called()
+
+    def test_vcp_descriptor_error_does_not_break_uart_discovery(self):
+        with patch(
+            "pyftdi.ftdi.Ftdi.list_devices",
+            side_effect=RuntimeError(
+                "The device has no langid (permission issue, no string descriptors supported)"
+            ),
+        ):
+            self.assertEqual(discover_usb_bridges(), [])
+
+    def test_vcp_backend_error_does_not_break_uart_discovery(self):
+        with patch(
+            "pyftdi.ftdi.Ftdi.list_devices",
+            side_effect=NotImplementedError(
+                "Operation not supported or unimplemented on this platform"
+            ),
+        ):
+            self.assertEqual(discover_usb_bridges(), [])
+
     def test_unknown_product_is_not_guessed(self):
         self.assertIsNone(product_for(0x0403, 0xFFFF))
         self.assertIsNone(make_bridge(vid=0x1234, pid=0x5678))
