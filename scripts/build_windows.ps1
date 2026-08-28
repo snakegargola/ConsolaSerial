@@ -31,12 +31,24 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $selfTestReport = Join-Path $RootDir "dist\windows-self-test.json"
-& "$RootDir\dist\SerialMonitor.exe" --self-test $selfTestReport
-if ($LASTEXITCODE -ne 0) {
+$executablePath = Join-Path $RootDir "dist\SerialMonitor.exe"
+# SerialMonitor.exe uses the Windows GUI subsystem (--windowed). PowerShell
+# does not reliably wait for GUI executables invoked with ``&``, so the report
+# could be copied before the self-test had written it. Start-Process makes the
+# build wait and gives us the executable's actual exit code.
+$selfTestProcess = Start-Process `
+  -FilePath $executablePath `
+  -ArgumentList @("--self-test", $selfTestReport) `
+  -Wait `
+  -PassThru
+if ($selfTestProcess.ExitCode -ne 0) {
     if (Test-Path $selfTestReport) {
         Get-Content $selfTestReport
     }
     throw "El ejecutable Windows no pasó la autoprueba de dependencias."
+}
+if (-not (Test-Path $selfTestReport)) {
+    throw "La autoprueba terminó sin generar el reporte: $selfTestReport"
 }
 
 New-Item -Path "$RootDir\dist\windows" -ItemType Directory -Force | Out-Null
