@@ -115,10 +115,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release
-
-      - name: Flatten artifact folders
-        run: |
-          find release -mindepth 2 -type f -name "SerialMonitor-*" -exec cp {} release/ \;
+          merge-multiple: true
 
       - name: Generate checksums
         run: |
