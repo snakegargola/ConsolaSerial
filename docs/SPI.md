@@ -66,10 +66,10 @@ SPI NOR, lectura EEPROM 25xx y comandos de inicialización de pantallas. Los
 presets no incluyen programación ni borrado para evitar modificar memorias por
 accidente.
 
-La plantilla de pantalla sirve para ordenar y validar comandos, pero una pantalla
-real normalmente necesita pines `D/C` y `RESET`. La aplicación todavía no ejecuta
-esas señales GPIO; el perfil lo indica explícitamente en lugar de asumir un
-cableado que pudiera dañar el módulo.
+La pestaña `GPIO` permite manejar señales auxiliares como `D/C`, `RESET`, `BUSY`
+o interrupciones. Sólo expone pines no reservados por SPI: con un `/CS` en un
+FT4232H quedan `xDBUS4`…`xDBUS7`; cada `/CS` adicional consume el siguiente pin.
+Dirección, salida y última lectura se conservan por adaptador e interfaz.
 
 Una secuencia completa o solamente la fila seleccionada puede repetirse. La
 ejecución se detiene en la primera validación fallida y muestra `PASS/FAIL` por
@@ -147,6 +147,24 @@ Los ajustes del inspector, memoria y repetición de secuencias se conservan por
 adaptador e interfaz mediante la configuración del workspace USB Bridge.
 
 ## Pruebas rápidas
+
+### SPI Display
+
+`SPI Display` reúne SPI y GPIO en una prueba rápida para módulos TFT. Incluye
+perfiles editables para ST7789 240×240, ST7735 128×160 e ILI9341 320×240, además
+de `Custom RGB565`. Permite seleccionar los GPIO de D/C, RESET y backlight,
+editar resolución y offsets, y definir la inicialización con líneas
+`COMMAND_HEX ; DATA_HEX ; DELAY_MS`.
+
+Las acciones disponibles son reset físico, inicialización, barras de color,
+checkerboard, limpiar en negro y convertir/enviar una imagen. `Init + color
+bars` es la validación inicial recomendada. El framebuffer configura las ventanas
+`2Ah/2Bh`, inicia RAM write con `2Ch` y conserva `/CS` activo mientras transmite
+cada bloque. Los perfiles `.spidisplay.json` pueden guardarse para otro módulo.
+
+Los presets son puntos de partida, no identificación automática: módulos con el
+mismo controlador pueden requerir offsets, MADCTL, inversión o secuencias de
+alimentación diferentes. Verifica el datasheet antes de ejecutar.
 
 ### Loopback
 

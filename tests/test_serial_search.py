@@ -110,8 +110,8 @@ class SerialSearchTests(unittest.TestCase):
             window.usb_bridge_mode_combos["C"].itemText(index)
             for index in range(window.usb_bridge_mode_combos["C"].count())
         ]
-        self.assertEqual(modes_a, ["UART", "I2C", "SPI"])
-        self.assertEqual(modes_c, ["UART"])
+        self.assertEqual(modes_a, ["UART", "I2C", "SPI", "GPIO"])
+        self.assertEqual(modes_c, ["UART", "GPIO"])
 
         window.usb_bridge_mode_combos["A"].setCurrentText("SPI")
         window._apply_usb_bridge_workspace_modes(show_error=False)

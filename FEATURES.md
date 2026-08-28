@@ -55,6 +55,18 @@ El procedimiento de cableado y las precauciones de nivel eléctrico están en
   exportable a CSV o JSON.
 - Loopback MOSI→MISO con resultado PASS/FAIL y lectura rápida de JEDEC ID
   mediante comando `0x9F`.
+- GPIO auxiliar integrado: utiliza únicamente los DBUS libres después de las
+  señales SPI y las líneas `/CS` configuradas.
+
+## 🔌 GPIO por interfaz FTDI
+
+- Modo GPIO dedicado e independiente en todas las interfaces compatibles.
+- A/B mediante MPSSE; C/D del FT4232H mediante bit-bang asíncrono.
+- Dirección por pin, escritura HIGH/LOW, lectura física y persistencia por canal.
+- Validación de máscaras para impedir que GPIO auxiliar sobrescriba SCLK, MOSI,
+  MISO o `/CS`.
+- Pestaña `SPI Display` con perfiles ST7789/ST7735/ILI9341 y perfil RGB565
+  completamente configurable; reset, inicialización, patrones e imágenes.
 
 Cableado, precauciones y límites en [`docs/SPI.md`](docs/SPI.md).
 

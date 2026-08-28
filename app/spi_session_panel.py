@@ -46,6 +46,11 @@ from .spi_memory_worker import SpiMemoryWorker
 from .spi_register_widget import SpiRegisterWidget
 from .spi_register_map_widget import SpiRegisterMapWidget
 from .spi_register_map_worker import SpiRegisterMapWorker
+from .gpio_bus import gpio_width_for_interface, spi_gpio_mask
+from .gpio_widget import GpioPanel
+from .gpio_worker import GpioWorker
+from .spi_display_widget import SpiDisplayWidget
+from .spi_display_worker import SpiDisplayWorker
 
 
 OPERATION_LABELS = {
@@ -64,6 +69,8 @@ class SpiSessionPanel(QWidget):
     sequence_finished = pyqtSignal(object)
     memory_finished = pyqtSignal(object)
     register_map_finished = pyqtSignal(object)
+    gpio_finished = pyqtSignal(object)
+    display_finished = pyqtSignal(object)
 
     def __init__(self, interface, bridge, config, channel_manager, parent=None):
         super().__init__(parent)
@@ -80,6 +87,8 @@ class SpiSessionPanel(QWidget):
         self.sequence_finished.connect(self._sequence_done)
         self.memory_finished.connect(self._memory_done)
         self.register_map_finished.connect(self._register_map_done)
+        self.gpio_finished.connect(self._gpio_done)
+        self.display_finished.connect(self._display_done)
         self._build_ui()
         self._load_config()
         self._update_operation_ui()
@@ -108,6 +117,21 @@ class SpiSessionPanel(QWidget):
         self.memory_widget = SpiMemoryWidget()
         self.memory_widget.operation_requested.connect(self._run_memory_operation)
         self.tabs.addTab(self.memory_widget, "Memory")
+        gpio_width = gpio_width_for_interface(self.bound_bridge, self._interface())
+        self.gpio_widget = GpioPanel(
+            title="Auxiliary GPIO shared with this SPI controller",
+            width=gpio_width, available_mask=spi_gpio_mask(1, gpio_width),
+            pin_prefix=f"{self.session_channel}DBUS",
+        )
+        self.gpio_widget.operation_requested.connect(self._run_gpio_operation)
+        self.tabs.addTab(self.gpio_widget, "GPIO")
+        self.display_widget = SpiDisplayWidget(
+            available_mask=spi_gpio_mask(1, gpio_width),
+            pin_prefix=f"{self.session_channel}DBUS",
+            width=gpio_width,
+        )
+        self.display_widget.operation_requested.connect(self._run_display_operation)
+        self.tabs.addTab(self.display_widget, "SPI Display")
         self.tabs.addTab(self._build_history_tab(), "History")
         root.addWidget(self.tabs, stretch=1)
 
@@ -156,6 +180,7 @@ class SpiSessionPanel(QWidget):
         grid.addWidget(QLabel("Selected /CS:"), 2, 0)
         self.chip_select_combo = QComboBox()
         self.cs_count_spin.valueChanged.connect(self._update_chip_selects)
+        self.cs_count_spin.valueChanged.connect(self._update_gpio_pins)
         grid.addWidget(self.chip_select_combo, 2, 1)
         grid.addWidget(QLabel("Dummy byte:"), 2, 2)
         self.dummy_edit = QLineEdit("00")
@@ -505,6 +530,84 @@ class SpiSessionPanel(QWidget):
                                             self.register_map_finished.emit, write_data=data)
         self._worker.start()
 
+    def _run_gpio_operation(self, state, write_outputs):
+        """Access only pins not reserved by the active SPI configuration."""
+        if self.is_session_active():
+            return
+        try:
+            settings, _dummy = self._settings()
+            expected_mask = spi_gpio_mask(settings.cs_count, state.width)
+            if state.available_mask != expected_mask:
+                raise ValueError(
+                    "The SPI /CS configuration changed; review available GPIO pins."
+                )
+            self.channel_manager.acquire(
+                self.session_channel, "SPI", self._channel_owner
+            )
+        except (ValueError, InterfaceBusyError) as exc:
+            self.gpio_widget.status.setText(f"ERROR: {exc}")
+            return
+        self._set_busy(True)
+        self.gpio_widget.set_busy(True)
+        self.gpio_widget.status.setText("Accessing SPI auxiliary GPIO pins…")
+        url = f"{self.bound_bridge.base_url}/{self.session_interface}"
+        self._worker = GpioWorker(
+            url, state, self.gpio_finished.emit, spi_settings=settings,
+            write_outputs=write_outputs,
+        )
+        self._worker.start()
+
+    def _gpio_done(self, result):
+        self._worker = None
+        self._set_busy(False)
+        self.gpio_widget.set_busy(False)
+        self.gpio_widget.show_result(result)
+        self.status_label.setText(self.gpio_widget.status.text())
+        if self._shutting_down:
+            self.channel_manager.release(self.session_channel, self._channel_owner)
+
+    def _run_display_operation(self, request):
+        if self.is_session_active():
+            return
+        try:
+            settings, _dummy = self._settings()
+            available = spi_gpio_mask(settings.cs_count, self.display_widget.width)
+            selected = [
+                pin for pin in request["gpio_pins"].values() if pin is not None
+            ]
+            if any(not available & (1 << pin) for pin in selected):
+                raise ValueError(
+                    "The SPI /CS configuration changed; select available display GPIO pins."
+                )
+            self.channel_manager.acquire(
+                self.session_channel, "SPI", self._channel_owner
+            )
+        except (KeyError, ValueError, InterfaceBusyError) as exc:
+            self.display_widget.status.setText(f"ERROR: {exc}")
+            return
+        self._set_busy(True)
+        self.display_widget.set_busy(True)
+        self.display_widget.status.setText(
+            f"Running display action: {request['action']}…"
+        )
+        url = f"{self.bound_bridge.base_url}/{self.session_interface}"
+        self._worker = SpiDisplayWorker(
+            url, settings, request["profile"], request["action"],
+            request["gpio_pins"], self.display_finished.emit,
+            payload=request.get("payload", b""),
+            backlight_on=request.get("backlight_on", True),
+        )
+        self._worker.start()
+
+    def _display_done(self, result):
+        self._worker = None
+        self._set_busy(False)
+        self.display_widget.set_busy(False)
+        self.display_widget.show_result(result)
+        self.status_label.setText(self.display_widget.status.text())
+        if self._shutting_down:
+            self.channel_manager.release(self.session_channel, self._channel_owner)
+
     def _register_map_done(self, result):
         self._worker = None; self._set_busy(False)
         self.register_map_widget.show_result(result, self._register_map_profile)
@@ -607,6 +710,20 @@ class SpiSessionPanel(QWidget):
         index = self.chip_select_combo.findData(current)
         self.chip_select_combo.setCurrentIndex(max(0, index))
 
+    def _update_gpio_pins(self):
+        if hasattr(self, "gpio_widget"):
+            available = spi_gpio_mask(
+                self.cs_count_spin.value(), self.gpio_widget.width
+            )
+            self.gpio_widget.set_available_mask(available)
+            self.display_widget.set_available_mask(available)
+
+    def _interface(self):
+        return next(
+            item for item in self.bound_bridge.interfaces
+            if item.index == self.session_interface
+        )
+
     def _update_operation_ui(self):
         operation = self.operation_combo.currentData()
         needs_tx = operation in ("write", "write_read")
@@ -665,6 +782,8 @@ class SpiSessionPanel(QWidget):
         self.register_widget.apply_settings(self.config.get("spi_register", {}))
         self.memory_widget.apply_settings(self.config.get("spi_memory", {}))
         self.register_map_widget.apply_settings(self.config.get("spi_register_map", {}))
+        self.gpio_widget.apply_settings(self.config.get("spi_gpio", {}))
+        self.display_widget.apply_settings(self.config.get("spi_display", {}))
         self.sequence_widget.repeat_spin.setValue(int(self.config.get("spi_sequence_repeat", 1)))
         self.sequence_widget.timeout_spin.setValue(int(self.config.get("spi_sequence_timeout", 30)))
 
@@ -686,5 +805,7 @@ class SpiSessionPanel(QWidget):
         self.config.set("spi_register", self.register_widget.settings_dict())
         self.config.set("spi_memory", self.memory_widget.settings_dict())
         self.config.set("spi_register_map", self.register_map_widget.settings_dict())
+        self.config.set("spi_gpio", self.gpio_widget.settings_dict())
+        self.config.set("spi_display", self.display_widget.settings_dict())
         self.config.set("spi_sequence_repeat", self.sequence_widget.repeat_spin.value())
         self.config.set("spi_sequence_timeout", self.sequence_widget.timeout_spin.value())

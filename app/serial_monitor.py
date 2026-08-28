@@ -42,11 +42,12 @@ from .i2c_bus import I2cBusSettings
 from .serial_payload import encode_serial_payload, format_payload_preview
 from .uart_tools_widget import UartToolsPanel
 from .spi_session_panel import SpiSessionPanel
+from .gpio_session_panel import GpioSessionPanel
 from .bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
 from .usb_bridge import (
-    I2C, SPI, UART, capability_summary, discover_usb_bridges,
+    GPIO, I2C, SPI, UART, capability_summary, discover_usb_bridges,
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -288,6 +289,8 @@ class SerialMonitorApp(QMainWindow):
             session.shutdown_session()
         for session in getattr(self, "usb_bridge_spi_sessions", {}).values():
             session.shutdown_session()
+        for session in getattr(self, "usb_bridge_gpio_sessions", {}).values():
+            session.shutdown_session()
         self.usb_bridge_channel_tabs.clear()
         self._clear_layout(self.usb_bridge_modes_layout)
         self.usb_bridge_mode_combos = {}
@@ -295,6 +298,7 @@ class SerialMonitorApp(QMainWindow):
         self.usb_bridge_uart_sessions = {}
         self.usb_bridge_i2c_sessions = {}
         self.usb_bridge_spi_sessions = {}
+        self.usb_bridge_gpio_sessions = {}
         bridge = self.usb_bridge_combo.currentData()
         self.active_bridge = bridge
         if bridge is None:
@@ -321,7 +325,7 @@ class SerialMonitorApp(QMainWindow):
         for interface in bridge.interfaces:
             default_mode = I2C if I2C in interface.capabilities else UART
             requested = str(saved_modes.get(interface.name, default_mode)).upper()
-            implemented = {UART, I2C, SPI} & interface.capabilities
+            implemented = {UART, I2C, SPI, GPIO} & interface.capabilities
             requested_modes[interface.name] = (
                 requested if requested in implemented else default_mode
             )
@@ -333,14 +337,14 @@ class SerialMonitorApp(QMainWindow):
         )
         self.usb_bridge_note.setText(
             "Each interface is independent. Only capabilities reported for this "
-            "chip are shown. JTAG/GPIO are identified now and their panels "
-            "will become selectable when those tools are added."
+            "chip are shown. GPIO is available as a dedicated mode on every "
+            "compatible interface and as auxiliary pins inside SPI."
         )
 
         for interface in bridge.interfaces:
             channel = interface.name
             implemented = [
-                protocol for protocol in (UART, I2C, SPI)
+                protocol for protocol in (UART, I2C, SPI, GPIO)
                 if protocol in interface.capabilities
             ]
             self.usb_bridge_modes_layout.addWidget(QLabel(f"Interface {channel}:"))
@@ -389,6 +393,17 @@ class SerialMonitorApp(QMainWindow):
                 )
                 self.usb_bridge_spi_sessions[channel] = spi
                 stack.addWidget(spi)
+            if GPIO in interface.capabilities:
+                gpio_config = ScopedConfig(
+                    self.config,
+                    ("usb_bridge_sessions", bridge.key, channel, "gpio"),
+                    DEFAULT_CONFIG,
+                )
+                gpio = GpioSessionPanel(
+                    interface, bridge, gpio_config, self.channel_manager
+                )
+                self.usb_bridge_gpio_sessions[channel] = gpio
+                stack.addWidget(gpio)
             page_root.addWidget(stack)
             self.usb_bridge_channel_tabs.addTab(page, f"Interface {channel}")
         self.usb_bridge_modes_layout.addStretch()
@@ -430,7 +445,7 @@ class SerialMonitorApp(QMainWindow):
             stack = self.usb_bridge_channel_stacks[channel]
             target = self._usb_bridge_session(channel, desired)
             stack.setCurrentWidget(target)
-            if desired in (I2C, SPI):
+            if desired in (I2C, SPI, GPIO):
                 target.activate_session()
             self.usb_bridge_channel_tabs.setTabText(
                 tab_index, f"Interface {channel} — {desired}"
@@ -442,6 +457,7 @@ class SerialMonitorApp(QMainWindow):
             UART: self.usb_bridge_uart_sessions,
             I2C: self.usb_bridge_i2c_sessions,
             SPI: self.usb_bridge_spi_sessions,
+            GPIO: self.usb_bridge_gpio_sessions,
         }
         return sessions.get(mode, {}).get(channel)
 
@@ -1221,6 +1237,8 @@ class SerialMonitorApp(QMainWindow):
                 session._collect_config()
             for session in self.usb_bridge_spi_sessions.values():
                 session._collect_config()
+            for session in self.usb_bridge_gpio_sessions.values():
+                session.config.set("gpio", session.settings_dict())
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
         self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
@@ -3658,6 +3676,8 @@ class SerialMonitorApp(QMainWindow):
             for session in self.usb_bridge_i2c_sessions.values():
                 session.shutdown_session()
             for session in self.usb_bridge_spi_sessions.values():
+                session.shutdown_session()
+            for session in self.usb_bridge_gpio_sessions.values():
                 session.shutdown_session()
         self.config.save()
         if self.worker:
