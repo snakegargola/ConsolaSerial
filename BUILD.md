@@ -21,6 +21,11 @@ Salida final:
 - `dist/linux/SerialMonitor`
 - `dist/linux/config.json`
 - `dist/linux/serial.png`
+- `dist/linux/LEEME.md`
+- `dist/linux/runtime-self-test.json`
+
+GitHub Actions publica tanto el binario individual como
+`SerialMonitor-linux.tar.gz`, que incluye todos estos archivos.
 
 ## Windows (desde Windows)
 
