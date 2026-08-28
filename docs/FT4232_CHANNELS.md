@@ -9,10 +9,10 @@ en paralelo.
 
 | Canal | Modos disponibles ahora | Interfaz FTDI |
 |---|---|---:|
-| A | UART o I²C | 1 |
-| B | UART o I²C | 2 |
-| C | UART | 3 |
-| D | UART | 4 |
+| A | UART, I²C, SPI o GPIO | 1 |
+| B | UART, I²C, SPI o GPIO | 2 |
+| C | UART o GPIO | 3 |
+| D | UART o GPIO | 4 |
 
 Las combinaciones principales son:
 
@@ -21,21 +21,35 @@ Las combinaciones principales son:
 - A UART + B I²C: tres UART y un bus I²C.
 - A I²C + B I²C: dos cajas I²C completas y dos UART.
 
-Los canales A/B están preparados en el administrador de recursos para añadir
-SPI, JTAG y GPIO posteriormente. Esos modos aún no aparecen en la interfaz.
+Los canales A/B usan MPSSE para I²C, SPI y GPIO. C/D usan el modo bit-bang
+asíncrono para GPIO porque no incorporan MPSSE. Cada canal conserva propietario,
+configuración y operación en curso independientes.
 
 ## Uso
 
 1. Selecciona el adaptador FT4232H detectado.
-2. Selecciona `UART` o `I2C` para las interfaces A y B.
+2. Selecciona el modo compatible que necesites en cada interfaz.
 3. Abre `USB Bridge` y entra a `Interface A`, `B`, `C` o `D`.
 4. Cada UART tiene puerto, baud rate, monitor, secuencias, historial, colores,
    estadísticas y conexión propios.
 5. Cada I²C posee Scanner, Device Inspector, Display Test y Sequence Builder
    completos, con su propio worker y bloqueo interno.
 
-No se permite cambiar el modo de A/B mientras su sesión está conectada o tiene
-una operación activa. Primero hay que desconectar UART o esperar/detener I²C.
+No se permite cambiar el modo mientras la sesión está conectada o tiene una
+operación activa. Primero desconecta UART o espera a que finalice la operación.
+
+## GPIO
+
+El modo `GPIO` dedicado permite configurar individualmente `xDBUS0`…`xDBUS7`
+como entrada o salida, escribir niveles y leer el estado físico. En A/B también
+existe una pestaña `GPIO` dentro del modo SPI: sólo muestra los pines que no
+están reservados por SCLK, MOSI, MISO y las líneas `/CS` configuradas. Así SPI y
+sus señales auxiliares comparten una sola apertura MPSSE y no compiten por el
+mismo canal.
+
+Las entradas no tienen una lógica válida si quedan flotantes. Usa una resistencia
+pull-up/pull-down o una señal conducida. Los FTDI trabajan con lógica de 3.3 V;
+verifica los límites eléctricos del módulo exacto y une siempre GND.
 
 `USB Serial / General` permite trabajar con adaptadores y puertos seriales que
 no pertenecen al FT4232H: CH340, CP210x, PL2303, CDC/ACM, puertos COM y otros.
@@ -57,6 +71,8 @@ frecuencia por separado.
 - `UartSessionPanel` reutiliza la consola serial completa con un `SerialWorker`
   exclusivo.
 - `I2cSessionPanel` reutiliza la caja I²C completa con un worker exclusivo.
+- `SpiSessionPanel` integra SPI y sus GPIO auxiliares con el mismo controlador.
+- `GpioSessionPanel` administra GPIO dedicado tanto MPSSE como bit-bang.
 - `ScopedConfig` presenta una sección de configuración independiente a cada
   sesión sin duplicar `ConfigManager`.
 
