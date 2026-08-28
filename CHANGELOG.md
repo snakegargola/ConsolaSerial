@@ -1,5 +1,12 @@
 # Historial de Cambios
 
+## En desarrollo (2026-08-28) - Distribución Linux
+
+- Agregado un paquete `tar.gz` con ejecutable, configuración, icono,
+  autoprueba e instrucciones de uso.
+- El runner Linux instala explícitamente las bibliotecas gráficas y USB de
+  ejecución y muestra cada prueba por nombre para facilitar diagnósticos.
+
 ## En desarrollo (2026-08-28) - Renovación de interfaz
 
 - Agregado un sistema visual centralizado para temas oscuro y claro, con

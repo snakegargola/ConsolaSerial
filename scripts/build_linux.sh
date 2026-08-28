@@ -42,6 +42,7 @@ cp -f "$ROOT_DIR/dist/SerialMonitor" "$ROOT_DIR/dist/linux/SerialMonitor"
 chmod +x "$ROOT_DIR/dist/linux/SerialMonitor"
 cp -f "$ROOT_DIR/config.example.json" "$ROOT_DIR/dist/linux/config.json"
 cp -f "$ROOT_DIR/assets/serial.png" "$ROOT_DIR/dist/linux/serial.png"
+cp -f "$ROOT_DIR/docs/LINUX.md" "$ROOT_DIR/dist/linux/LEEME.md"
 cp -f "$SELF_TEST_REPORT" "$ROOT_DIR/dist/linux/runtime-self-test.json"
 
 echo "Build Linux listo en: $ROOT_DIR/dist/linux"
