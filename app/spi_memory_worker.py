@@ -86,9 +86,8 @@ class SpiMemoryWorker(threading.Thread):
 
     @staticmethod
     def _exchange(port, command, length):
-        port.write(command, start=True, stop=False)
-        return bytes(port.exchange(b"\xff" * length, length,
-                                   start=False, stop=True, duplex=True))
+        return bytes(port.exchange(command, length, start=True, stop=True,
+                                   duplex=False))
 
     def _read(self, port, address, length):
         output = bytearray()

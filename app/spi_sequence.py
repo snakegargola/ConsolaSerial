@@ -13,7 +13,7 @@ from .spi_bus import SpiTransaction, format_spi_hex, parse_spi_hex
 
 SPI_PROFILE_SCHEMA = "consola-serial.spi-profile"
 SPI_PROFILE_VERSION = 1
-STEP_OPERATIONS = frozenset({"write", "read", "write_read", "duplex", "loopback", "delay"})
+STEP_OPERATIONS = frozenset({"write", "read", "write_read", "loopback", "delay"})
 VALIDATIONS = frozenset({"none", "equals", "masked_equals", "not_all_00_ff"})
 
 

@@ -41,13 +41,13 @@ class SpiBusTests(unittest.TestCase):
         self.assertEqual(parse_spi_hex("9F00AA55"), expected)
         self.assertEqual(parse_spi_hex("0x9F, 0x00, 0xAA, 0x55"), expected)
 
-    def test_read_clocks_configured_dummy_bytes(self):
+    def test_read_uses_physical_half_duplex_input(self):
         transaction = SpiTransaction("read", read_length=3, dummy_byte=0xFF)
         port = _FakePort(b"\x11\x22\x33")
         result = execute_spi_transaction(port, transaction)
         self.assertEqual(result, b"\x11\x22\x33")
-        self.assertEqual(port.calls[0][1], b"\xFF\xFF\xFF")
-        self.assertTrue(port.calls[0][3]["duplex"])
+        self.assertEqual(port.calls[0][1], b"")
+        self.assertFalse(port.calls[0][3]["duplex"])
 
     def test_write_read_keeps_cs_asserted_between_phases(self):
         transaction = SpiTransaction(
@@ -59,23 +59,19 @@ class SpiBusTests(unittest.TestCase):
         )
         self.assertEqual(
             port.calls,
-            [
-                ("write", b"\x9F", {"start": True, "stop": False}),
-                (
-                    "exchange", b"\xFF\xFF\xFF", 3,
-                    {"start": False, "stop": True, "duplex": True},
-                ),
-            ],
+            [("exchange", b"\x9F", 3,
+              {"start": True, "stop": True, "duplex": False})],
         )
         self.assertEqual(transaction.wire_tx, b"\x9F\xFF\xFF\xFF")
 
-    def test_duplex_extends_mosi_with_dummy_bytes(self):
-        transaction = SpiTransaction(
-            "duplex", tx=b"\xAA", read_length=3, dummy_byte=0x00
-        )
-        port = _FakePort(b"\x01\x02\x03")
-        execute_spi_transaction(port, transaction)
-        self.assertEqual(port.calls[0][1], b"\xAA\x00\x00")
+    def test_unreliable_generic_full_duplex_is_rejected(self):
+        with self.assertRaises(ValueError):
+            SpiTransaction("duplex", tx=b"\xAA", read_length=1)
+
+    def test_loopback_cannot_fall_back_to_pyftdi_full_duplex(self):
+        transaction = SpiTransaction("loopback", tx=b"\xAA\x55")
+        with self.assertRaisesRegex(ValueError, "Physical loopback"):
+            execute_spi_transaction(_FakePort(b"\xAA\x55"), transaction)
 
     def test_invalid_operation_requirements_are_rejected(self):
         for args in (

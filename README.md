@@ -32,7 +32,7 @@ Aplicación de escritorio para monitoreo y envío de datos por puerto serial, co
 - Workspace `USB Bridge` con sesiones independientes según las interfaces reales
   del adaptador conectado
 - Maestro SPI por interfaz MPSSE con modos 0–3, reloj editable, hasta cinco
-  señales `/CS`, escritura, lectura, Write→Read, full-duplex e historial
+  señales `/CS`, escritura, lectura física half-duplex, Write→Read e historial
 - Pruebas rápidas SPI de loopback MOSI→MISO e identificación JEDEC `0x9F`
   con perfiles JSON y secuencias editables para memorias, pantallas y comandos
   de dispositivos.

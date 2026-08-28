@@ -33,9 +33,8 @@ class SpiRegisterMapWorker(threading.Thread):
                     continue
                 if "R" not in register.access: continue
                 command = self.profile.command(register) + b"\x00" * self.profile.dummy_bytes
-                port.write(command, start=True, stop=False)
-                data = bytes(port.exchange(b"\x00" * register.length, register.length,
-                                           start=False, stop=True, duplex=True))
+                data = bytes(port.exchange(command, register.length,
+                                           start=True, stop=True, duplex=False))
                 result["values"].append({"index": index, "data": data})
             result["actual_frequency"] = int(round(float(port.frequency)))
         except Exception as exc: result.update(classify_spi_error(exc))

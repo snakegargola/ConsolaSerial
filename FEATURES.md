@@ -50,7 +50,7 @@ El procedimiento de cableado y las precauciones de nivel eléctrico están en
 - Reloj editable de 1 kHz a 30 MHz y modos SPI 0, 1, 2 y 3.
 - De una a cinco señales `/CS`, seleccionables por transacción.
 - Operaciones Write, Read con byte dummy, Write→Read manteniendo `/CS` y
-  transferencia full-duplex.
+  transferencia Write→Read half-duplex con lectura física de MISO.
 - Vista previa exacta de los bytes MOSI, respuesta HEX/ASCII e historial
   exportable a CSV o JSON.
 - Loopback MOSI→MISO con resultado PASS/FAIL y lectura rápida de JEDEC ID
