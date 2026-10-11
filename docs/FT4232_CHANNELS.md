@@ -82,7 +82,7 @@ pueden competir dentro de A, pero una operación de A no bloquea B, C ni D.
 ## Sistemas operativos
 
 En Ubuntu, cada UART necesita permisos sobre su `/dev/ttyUSB*`; la regla USB de
-PyFtdi sigue siendo necesaria para los canales MPSSE. En Windows, la combinación
+PyFtdi sigue siendo necesaria para los canales MPSSE en Linux.
 UART/MPSSE depende de que el controlador seleccionado para cada interfaz
 conserve VCP en los canales UART y permita acceso libusb en los canales usados
-por PyFtdi. Esta combinación debe validarse durante el empaquetado de Windows.
+por PyFtdi. Esta combinación debe validarse durante el build Linux.

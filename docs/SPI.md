@@ -197,6 +197,6 @@ suelen indicar modo, `/CS`, alimentación o cableado incorrectos.
 - No se ofrecen todavía `/CS` activo-alto, LSB-first ni palabras distintas de
   8 bits, para no presentar opciones que el backend actual no garantiza.
 
-En Linux, PyFtdi necesita permisos libusb sobre el adaptador. En Windows, la
+En Linux, PyFtdi necesita permisos libusb sobre el adaptador y reglas udev
 interfaz MPSSE debe usar un driver libusb compatible; no reemplaces a ciegas el
 driver VCP de todas las interfaces de un dispositivo compuesto.

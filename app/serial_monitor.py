@@ -1315,6 +1315,11 @@ class SerialMonitorApp(QMainWindow):
         ))
         for label, device in general_ports:
             self.port_combo.addItem(label, device)
+        if not general_ports:
+            self.port_combo.addItem(
+                "No serial devices detected — connect a USB/UART device and press Refresh",
+                None,
+            )
         index = self.port_combo.findData(current)
         if index >= 0:
             self.port_combo.setCurrentIndex(index)

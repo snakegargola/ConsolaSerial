@@ -2,14 +2,12 @@
 
 PyFtdi imports backend modules by name and expects each module to expose a
 ``get_backend`` function.  Prefer the operating-system libusb installation;
-the ``libusb-package`` wheel is a portable fallback, especially for the
-PyInstaller Windows executable.
+the ``libusb-package`` wheel is a portable fallback for the Linux build.
 """
 
 from __future__ import annotations
 
 import ctypes
-import os
 
 from usb.backend import libusb1
 
@@ -55,8 +53,7 @@ def validate_packaged_library():
     library_path = libusb_package.get_library_path()
     if library_path is None:
         raise RuntimeError("libusb-package does not contain a native library.")
-    loader = ctypes.WinDLL if os.name == "nt" else ctypes.CDLL
-    library = loader(str(library_path))
+    library = ctypes.CDLL(str(library_path))
     if not getattr(library, "libusb_init", None):
         raise RuntimeError("The packaged libusb library has no libusb_init symbol.")
     return str(library_path)

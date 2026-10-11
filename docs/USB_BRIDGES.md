@@ -66,6 +66,4 @@ publicidad de una marca.
 ## Controladores
 
 En Linux, PyFtdi necesita acceso al dispositivo USB y UART necesita permiso para
-`/dev/ttyUSB*`. En Windows, VCP y libusb deben asignarse con cuidado por
-interfaz; instalar libusb sobre todo el dispositivo compuesto puede desactivar
-los puertos COM. Consulta [`WINDOWS.md`](WINDOWS.md) antes de cambiar un driver.
+`/dev/ttyUSB*`. Configura las reglas udev antes de cambiar un driver.

@@ -1,4 +1,4 @@
-"""Dependency self-test used to validate frozen Linux and Windows builds."""
+"""Dependency self-test used to validate the Linux build."""
 
 from __future__ import annotations
 

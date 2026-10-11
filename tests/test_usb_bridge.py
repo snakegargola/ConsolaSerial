@@ -10,7 +10,7 @@ from app.bridge_interface_manager import (
 from app.usb_bridge import (
     GPIO, I2C, JTAG, SPI, UART, discover_usb_bridges, make_bridge, product_for,
 )
-from app.serial_worker import bridge_interface_for_port
+from app.serial_worker import bridge_interface_for_port, list_port_details
 
 
 class UsbBridgeCatalogTests(unittest.TestCase):
@@ -112,6 +112,23 @@ class UsbBridgeCatalogTests(unittest.TestCase):
     def test_single_interface_adapter_does_not_require_location_suffix(self):
         port = SimpleNamespace(vid=0x0403, pid=0x6014, location="")
         self.assertEqual(bridge_interface_for_port(port), "A")
+
+    def test_serial_port_label_identifies_generic_usb_adapter(self):
+        port = SimpleNamespace(
+            device="COM7",
+            description="USB-SERIAL CH340",
+            manufacturer="QinHeng Electronics",
+            serial_number="ABC123",
+            location="1-4",
+            vid=0x1A86,
+            pid=0x7523,
+        )
+        with patch("serial.tools.list_ports.comports", return_value=[port]):
+            ports = list_port_details()
+        self.assertEqual(ports[0][1], "COM7")
+        self.assertIn("USB-SERIAL CH340", ports[0][0])
+        self.assertIn("1A86:7523", ports[0][0])
+        self.assertIn("S/N ABC123", ports[0][0])
 
 
 if __name__ == "__main__":

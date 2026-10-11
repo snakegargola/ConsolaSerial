@@ -8,8 +8,6 @@
 
 ### 📦 Artifacts
 - Linux: `SerialMonitor` + `config.json`
-- Windows direct: `SerialMonitor-windows.exe`
-- Windows package: `SerialMonitor-windows.zip` with config, guide and self-test report
 
 ### 🧪 Quick validation
 - App starts correctly

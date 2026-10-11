@@ -47,11 +47,9 @@ SerialPython/
 ├── assets/                      # Recursos (iconos, imágenes)
 ├── scripts/                     # Scripts de compilación
 │   ├── build_linux.sh
-│   ├── build_windows.bat
-│   └── build_windows.ps1
+│   └── build_linux.sh
 ├── dist/                        # Ejecutables compilados
-│   ├── linux/                   # Ejecutable para Linux
-│   └── windows/                 # Ejecutable para Windows (generado)
+│   └── linux/                   # Ejecutable para Linux
 ├── docs/                        # Documentación del proyecto
 ├── config.json                  # Configuración de usuario
 └── requirements.txt             # Dependencias Python
@@ -236,12 +234,6 @@ Display/Logging
 ```bash
 bash scripts/build_linux.sh
 # Resultado: dist/linux/SerialMonitor
-```
-
-### Windows
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
-# Resultado: dist/windows/SerialMonitor.exe
 ```
 
 ## Dependencias Principales

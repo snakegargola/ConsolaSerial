@@ -54,7 +54,7 @@ circuito externo, comparte GND y verifica primero el nivel de voltaje.
 
 El panel valida el camino físico TX/RX y el driver del sistema, pero no sustituye
 una prueba del protocolo del dispositivo. Los contadores de framing, parity y
-overrun no se exponen de forma uniforme por pyserial en Windows y Linux, por lo
+overrun no se exponen de forma uniforme por pyserial en Linux, por lo
 que no se inventan métricas que el controlador no pueda entregar.
 
 ## Implementación

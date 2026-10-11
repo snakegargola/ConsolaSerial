@@ -12,6 +12,35 @@ def list_ports():
     return [p.device for p in serial.tools.list_ports.comports()]
 
 
+def _port_label(port, product=None, channel=None):
+    """Build a useful, stable label so similar COM ports can be identified."""
+    device = str(getattr(port, "device", "") or "")
+    description = str(getattr(port, "description", "") or "").strip()
+    manufacturer = str(getattr(port, "manufacturer", "") or "").strip()
+    serial_number = str(getattr(port, "serial_number", "") or "").strip()
+    vid = getattr(port, "vid", None)
+    pid = getattr(port, "pid", None)
+
+    identity = description or manufacturer
+    if manufacturer and description and manufacturer.lower() not in description.lower():
+        identity = f"{manufacturer} {description}"
+    if not identity:
+        identity = "Serial device"
+
+    details = []
+    if product and channel:
+        identity = f"{product.model} interface {channel}"
+    elif vid is not None and pid is not None:
+        details.append(f"VID:PID {int(vid):04X}:{int(pid):04X}")
+    if serial_number:
+        details.append(f"S/N {serial_number}")
+    location = str(getattr(port, "location", "") or "").strip()
+    if location:
+        details.append(f"USB {location}")
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"{identity}{suffix} — {device}"
+
+
 def bridge_interface_for_port(port):
     """Return the known bridge interface name for a PySerial port, if any."""
     product = product_for(getattr(port, "vid", None), getattr(port, "pid", None))
@@ -45,7 +74,13 @@ def list_port_details(channel_modes=None, *, include_usb_bridges=True,
         only_bridge_interface = only_ft4232_channel
     channel_modes = channel_modes or {}
     result = []
-    for port in serial.tools.list_ports.comports():
+    try:
+        ports = list(serial.tools.list_ports.comports())
+    except Exception:
+        # A transient device-removal event must not leave the GUI
+        # worker or refresh action unusable.
+        ports = []
+    for port in ports:
         product = product_for(getattr(port, "vid", None), getattr(port, "pid", None))
         channel = bridge_interface_for_port(port)
         if product and not include_usb_bridges:
@@ -62,11 +97,9 @@ def list_port_details(channel_modes=None, *, include_usb_bridges=True,
             continue
         access = os.name == "nt" or os.access(port.device, os.R_OK | os.W_OK)
         warning = " — no permission" if not access else ""
-        if channel:
-            label = f"{product.model} interface {channel} — {port.device}{warning}"
-        else:
-            label = f"{port.device}{warning}"
+        label = _port_label(port, product, channel) + warning
         result.append((label, port.device))
+    result.sort(key=lambda item: item[1].lower())
     return result
 
 
