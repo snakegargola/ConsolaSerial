@@ -123,6 +123,21 @@ class UartToolsPanelTests(unittest.TestCase):
         self.assertEqual(restored.payload_spin.value(), 128)
         self.assertEqual(restored.timeout_spin.value(), 2.5)
 
+    def test_modem_polling_stops_when_disconnected_and_resumes_on_reconnect(self):
+        panel = self._panel()
+        worker = _FakeWorker()
+        self.assertFalse(panel._modem_timer.isActive())
+        panel.set_connection(worker, "None")
+        self.assertTrue(panel._modem_timer.isActive())
+        panel.set_connection(None, "None")
+        self.assertFalse(panel._modem_timer.isActive())
+        self.assertIn("?", panel.modem_labels["CTS"].text())
+        panel.set_connection(worker, "None")
+        self.assertTrue(panel._modem_timer.isActive())
+        self.assertIn("●", panel.modem_labels["CTS"].text())
+        panel.shutdown()
+        self.assertFalse(panel._modem_timer.isActive())
+
 
 if __name__ == "__main__":
     unittest.main()

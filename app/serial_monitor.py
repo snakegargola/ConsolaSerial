@@ -5,7 +5,6 @@ serial_monitor.py — Main application window (PyQt6).
 import threading
 import os
 import getpass
-from datetime import datetime
 import json
 import random
 import re
@@ -14,14 +13,14 @@ import time
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QComboBox, QPushButton, QCheckBox, QTextEdit, QLineEdit,
-    QStatusBar, QFileDialog, QMessageBox, QFrame, QSplitter,
-    QColorDialog, QGroupBox, QSpinBox, QDoubleSpinBox, QToolBar,
+    QStatusBar, QFileDialog, QMessageBox, QSplitter,
+    QColorDialog, QGroupBox, QSpinBox, QDoubleSpinBox,
     QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QTabWidget, QProgressBar,
-    QTabBar, QInputDialog, QStackedWidget,
+    QTabBar, QInputDialog, QStackedWidget, QScrollArea,
 )
-from PyQt6.QtGui import (QColor, QFont, QTextCharFormat, QTextCursor, QPalette,
-                         QShortcut, QKeySequence, QAction, QImage, QPixmap,
+from PyQt6.QtGui import (QColor, QFont, QTextCharFormat, QTextCursor,
+                         QShortcut, QKeySequence, QImage, QPixmap,
                          QPainter, QTransform, QValidator)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 
@@ -43,7 +42,7 @@ from .serial_payload import encode_serial_payload, format_payload_preview
 from .uart_tools_widget import UartToolsPanel
 from .spi_session_panel import SpiSessionPanel
 from .gpio_session_panel import GpioSessionPanel
-from .ui_theme import contrast_text, set_role, stylesheet
+from .ui_theme import contrast_text, palette, set_role, set_status, stylesheet
 from .bridge_interface_manager import (
     InterfaceBusyError, UsbBridgeInterfaceManager,
 )
@@ -103,6 +102,18 @@ class _Signals(QObject):
     usb_bridges_discovered = pyqtSignal(object, str)
 
 
+class _ProtocolStack(QStackedWidget):
+    """Size a channel for its active tool, rather than every hidden tool."""
+
+    def sizeHint(self):
+        widget = self.currentWidget()
+        return widget.sizeHint() if widget else super().sizeHint()
+
+    def minimumSizeHint(self):
+        widget = self.currentWidget()
+        return widget.minimumSizeHint() if widget else super().minimumSizeHint()
+
+
 class SerialMonitorApp(QMainWindow):
     def __init__(self, config: ConfigManager):
         super().__init__()
@@ -152,18 +163,22 @@ class SerialMonitorApp(QMainWindow):
         self._sequence_cmd_counter = 0
         
         # Statistics
-        self._stats_rx_bytes = 0
-        self._stats_tx_bytes = 0
         self._stats_start_time = time.time()
         self._stats_timer = QTimer(self)
         self._stats_timer.timeout.connect(self._update_statistics)
-        self._stats_timer.start(1000)  # Update every second
+        self._stats_timer.setInterval(1000)
         
         # Simple literal search
         self._search_text = ""
         self._search_results = []
         self._search_result_index = -1
-        
+        self._search_refresh_timer = QTimer(self)
+        self._search_refresh_timer.setSingleShot(True)
+        self._search_refresh_timer.setInterval(75)
+        self._search_refresh_timer.timeout.connect(
+            lambda: self._refresh_search_results(preserve_index=True)
+        )
+
         # Alerts
         self._alerts = []  # List of {"pattern": str, "regex": bool, "sound": bool}
 
@@ -173,8 +188,9 @@ class SerialMonitorApp(QMainWindow):
         self._color_bg = self.config.get("color_bg", "#1C1C1C")
 
         self.setWindowTitle("Serial Monitor — Embedded Systems")
-        self.setMinimumSize(1080, 700)
-        self.resize(1440, 900)
+        if self._manages_usb_bridges:
+            self.setMinimumSize(1080, 700)
+            self.resize(1440, 900)
         self._build_ui()
         self._load_config_into_ui()
         self._polish_widget_tree()
@@ -195,16 +211,17 @@ class SerialMonitorApp(QMainWindow):
         central.setObjectName("appSurface")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setSpacing(4)
-        root.setContentsMargins(6, 6, 6, 4)
-        root.addWidget(self._build_usb_bridge_mode_panel())
+        root.setSpacing(8)
+        root.setContentsMargins(12, 10, 12, 6)
+        self.usb_bridge_mode_panel = self._build_usb_bridge_mode_panel()
+        root.addWidget(self.usb_bridge_mode_panel)
         self.main_tabs = QTabWidget()
         self.main_tabs.setDocumentMode(True)
         root.addWidget(self.main_tabs, stretch=1)
 
         serial_tab = QWidget()
         serial_root = QVBoxLayout(serial_tab)
-        serial_root.setSpacing(4)
+        serial_root.setSpacing(8)
         serial_root.setContentsMargins(0, 0, 0, 0)
         serial_root.addWidget(self._build_config_panel())
         serial_root.addWidget(self._build_uart_tools_panel())
@@ -214,7 +231,7 @@ class SerialMonitorApp(QMainWindow):
         self.main_splitter = splitter
         sequence = self._build_sequence_panel()
         sequence.setMinimumWidth(320)
-        sequence.setMaximumWidth(520)
+        sequence.setMaximumWidth(640)
         splitter.addWidget(sequence)
         right = QWidget()
         right_root = QVBoxLayout(right)
@@ -225,11 +242,11 @@ class SerialMonitorApp(QMainWindow):
         right.setMinimumWidth(420)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        width = max(320, min(520, int(self.config.get("sequence_panel_width", 360))))
+        width = max(320, min(640, int(self.config.get("sequence_panel_width", 500))))
         splitter.setSizes([width, 900])
         serial_root.addWidget(splitter, stretch=1)
 
-        self.main_tabs.addTab(serial_tab, "Serial console")
+        self.main_tabs.addTab(self._scrollable(serial_tab), "Serial console")
         self.main_tabs.addTab(self._build_usb_bridge_workspace(), "Protocol bridge")
         self._build_status_bar()
         self.main_tabs.currentChanged.connect(
@@ -286,11 +303,41 @@ class SerialMonitorApp(QMainWindow):
         return workspace
 
     @staticmethod
+    def _scrollable(widget):
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(widget)
+        return area
+
+    @staticmethod
     def _clear_layout(layout):
         while layout.count():
             item = layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+    @staticmethod
+    def _retire_bridge_page(page):
+        """Release a removed tree after any in-flight worker has finished."""
+        page.hide()
+        sessions = [
+            widget for widget in page.findChildren(QWidget)
+            if hasattr(widget, "is_session_active")
+        ]
+        if not any(session.is_session_active() for session in sessions):
+            page.deleteLater()
+            return
+        timer = QTimer(page)
+        timer.setInterval(100)
+
+        def release_when_idle():
+            if not any(session.is_session_active() for session in sessions):
+                timer.stop()
+                page.deleteLater()
+
+        timer.timeout.connect(release_when_idle)
+        timer.start()
 
     def _rebuild_usb_bridge_workspace(self):
         """Recreate interface panels after selecting a physical adapter."""
@@ -302,7 +349,12 @@ class SerialMonitorApp(QMainWindow):
             session.shutdown_session()
         for session in getattr(self, "usb_bridge_gpio_sessions", {}).values():
             session.shutdown_session()
-        self.usb_bridge_channel_tabs.clear()
+        # QTabWidget.clear() removes tabs but keeps their pages alive. Delete
+        # the old trees as well, including their timers and signal receivers.
+        while self.usb_bridge_channel_tabs.count():
+            page = self.usb_bridge_channel_tabs.widget(0)
+            self.usb_bridge_channel_tabs.removeTab(0)
+            self._retire_bridge_page(page)
         self._clear_layout(self.usb_bridge_modes_layout)
         self.usb_bridge_mode_combos = {}
         self.usb_bridge_channel_stacks = {}
@@ -369,7 +421,7 @@ class SerialMonitorApp(QMainWindow):
             page = QWidget()
             page_root = QVBoxLayout(page)
             page_root.setContentsMargins(0, 0, 0, 0)
-            stack = QStackedWidget()
+            stack = _ProtocolStack()
             self.usb_bridge_channel_stacks[channel] = stack
             if UART in interface.capabilities:
                 uart_config = ScopedConfig(
@@ -415,11 +467,12 @@ class SerialMonitorApp(QMainWindow):
                 )
                 self.usb_bridge_gpio_sessions[channel] = gpio
                 stack.addWidget(gpio)
-            page_root.addWidget(stack)
+            page_root.addWidget(self._scrollable(stack))
             self.usb_bridge_channel_tabs.addTab(page, f"Interface {channel}")
         self.usb_bridge_modes_layout.addStretch()
         self._apply_usb_bridge_workspace_modes(show_error=False)
         self._polish_widget_tree()
+        self._apply_theme("dark" if self._dark_mode else "light")
 
     def _apply_usb_bridge_workspace_modes(self, show_error=True):
         """Switch a panel only when its outgoing session is idle."""
@@ -558,7 +611,7 @@ class SerialMonitorApp(QMainWindow):
         self.i2c_matrix.cellClicked.connect(self._i2c_matrix_address_clicked)
         self.i2c_matrix.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.i2c_matrix.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.i2c_matrix.setFont(QFont("Courier New", 10))
+        set_role(self.i2c_matrix, "monospace")
         scanner_root.addWidget(self.i2c_matrix, stretch=1)
         self.i2c_summary = QLabel("Press Scan I²C bus to search addresses 0x03–0x77.")
         self.i2c_summary.setWordWrap(True)
@@ -817,140 +870,78 @@ class SerialMonitorApp(QMainWindow):
 
     # ── Config panel ──────────────────────────────────────────────────────────
     def _build_config_panel(self):
-        box = QGroupBox("Serial Configuration")
-        grid = QGridLayout(box)
-        grid.setSpacing(4)
-
-        def lbl(text): return QLabel(text)
-        def combo(vals, width=90):
-            c = QComboBox(); c.addItems(vals); c.setFixedWidth(width); return c
-
-        # Tooltips descriptions
-        tooltips = {
-            "port": "Serial port to connect to (e.g., COM3, /dev/ttyUSB0)",
-            "baud": "Transmission speed in bits per second (higher = faster)",
-            "data": "Number of data bits per character (usually 8)",
-            "parity": "Error checking method: None, Even, Odd, Mark, or Space",
-            "stop": "Number of stop bits (1, 1.5, or 2)",
-            "flow": "Flow control method for handshaking (None, RTS/CTS, XON/XOFF)",
-            "eol_tx": "Line ending to append when transmitting (None, LF, CR, CR+LF)",
-            "eol_rx": "Line ending format expected from received data",
-            "ascii": "Display received data as text characters",
-            "hex": "Display received data in hexadecimal format",
-            "timestamp": "Show timestamp for each message",
-            "colors": "Customize colors for RX (received), TX (transmitted), and background"
-        }
-
-        # Row 0 - Port and communication settings
-        r = 0
-        port_label = lbl("Port:")
-        port_label.setToolTip(tooltips["port"])
-        grid.addWidget(port_label, r, 0)
-        self.port_combo = combo([], 110)
-        self.port_combo.setToolTip(tooltips["port"])
-        grid.addWidget(self.port_combo, r, 1)
-        btn_refresh = QPushButton("Refresh"); btn_refresh.setMinimumWidth(68)
-        btn_refresh.setToolTip("Refresh available ports")
-        btn_refresh.clicked.connect(self._refresh_ports)
-        grid.addWidget(btn_refresh, r, 2)
-
-        baud_label = lbl("Baud:")
-        baud_label.setToolTip(tooltips["baud"])
-        grid.addWidget(baud_label, r, 3)
-        self.baud_combo = combo(BAUD_RATES, 100)
-        self.baud_combo.setToolTip(tooltips["baud"])
-        grid.addWidget(self.baud_combo, r, 4)
-
-        data_label = lbl("Data:")
-        data_label.setToolTip(tooltips["data"])
-        grid.addWidget(data_label, r, 5)
-        self.databits_combo = combo(DATA_BITS, 55)
-        self.databits_combo.setToolTip(tooltips["data"])
-        grid.addWidget(self.databits_combo, r, 6)
-
-        parity_label = lbl("Parity:")
-        parity_label.setToolTip(tooltips["parity"])
-        grid.addWidget(parity_label, r, 7)
-        self.parity_combo = combo(PARITIES, 80)
-        self.parity_combo.setToolTip(tooltips["parity"])
-        grid.addWidget(self.parity_combo, r, 8)
-
-        stop_label = lbl("Stop:")
-        stop_label.setToolTip(tooltips["stop"])
-        grid.addWidget(stop_label, r, 9)
-        self.stopbits_combo = combo(STOP_BITS, 55)
-        self.stopbits_combo.setToolTip(tooltips["stop"])
-        grid.addWidget(self.stopbits_combo, r, 10)
-
-        flow_label = lbl("Flow:")
-        flow_label.setToolTip(tooltips["flow"])
-        grid.addWidget(flow_label, r, 11)
-        self.flow_combo = combo(FLOW_CTRL, 90)
-        self.flow_combo.setToolTip(tooltips["flow"])
-        grid.addWidget(self.flow_combo, r, 12)
-
+        box = QGroupBox("Serial configuration")
+        root = QVBoxLayout(box)
+        root.setSpacing(8)
+        connection = QHBoxLayout()
+        connection.setSpacing(8)
+        connection.addWidget(QLabel("Port:"))
+        self.port_combo = QComboBox()
+        self.port_combo.setMinimumWidth(220)
+        self.port_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.port_combo.setToolTip("Serial port to connect to (e.g., /dev/ttyUSB0)")
+        connection.addWidget(self.port_combo, stretch=1)
+        refresh = QPushButton("Refresh")
+        refresh.setToolTip("Refresh available ports")
+        refresh.clicked.connect(self._refresh_ports)
+        connection.addWidget(refresh)
+        connection.addWidget(QLabel("Baud:"))
+        self.baud_combo = QComboBox()
+        self.baud_combo.addItems(BAUD_RATES)
+        self.baud_combo.setMinimumWidth(110)
+        self.baud_combo.setToolTip("Transmission speed in bits per second")
+        connection.addWidget(self.baud_combo)
         self.connect_btn = QPushButton("Connect")
-        self.connect_btn.setFixedWidth(100)
+        self.connect_btn.setMinimumWidth(108)
         set_role(self.connect_btn, "primary")
         self.connect_btn.setToolTip("Establish or close serial connection")
         self.connect_btn.clicked.connect(self._toggle_connection)
-        grid.addWidget(self.connect_btn, r, 13, 1, 2)
-
-        # Row 1 - EOL, Display options, and Colors
-        r = 1
-        eol_tx_label = lbl("EOL TX:")
-        eol_tx_label.setToolTip(tooltips["eol_tx"])
-        grid.addWidget(eol_tx_label, r, 0)
-        self.eol_tx_combo = combo(EOL_OPT, 80)
-        self.eol_tx_combo.setToolTip(tooltips["eol_tx"])
-        grid.addWidget(self.eol_tx_combo, r, 1)
-
-        eol_rx_label = lbl("EOL RX:")
-        eol_rx_label.setToolTip(tooltips["eol_rx"])
-        grid.addWidget(eol_rx_label, r, 3)
-        self.eol_rx_combo = combo(EOL_OPT, 80)
-        self.eol_rx_combo.setToolTip(tooltips["eol_rx"])
-        grid.addWidget(self.eol_rx_combo, r, 4)
-
-        show_label = lbl("Display:")
-        show_label.setToolTip("Select display formats for received data")
-        grid.addWidget(show_label, r, 5)
-        self.chk_ascii = QCheckBox("ASCII"); self.chk_ascii.setChecked(True)
-        self.chk_ascii.setToolTip(tooltips["ascii"])
-        self.chk_hex   = QCheckBox("HEX")
-        self.chk_hex.setToolTip(tooltips["hex"])
-        self.chk_ts    = QCheckBox("Timestamp"); self.chk_ts.setChecked(True)
-        self.chk_ts.setToolTip(tooltips["timestamp"])
-        grid.addWidget(self.chk_ascii, r, 6)
-        grid.addWidget(self.chk_hex,   r, 7)
-        grid.addWidget(self.chk_ts,    r, 8)
-
-        colors_label = lbl("Colors:")
-        colors_label.setToolTip("Click buttons to customize display colors")
-        grid.addWidget(colors_label, r, 9)
-        self.btn_crx = QPushButton("RX"); self.btn_crx.setFixedWidth(44)
-        self.btn_crx.setToolTip("Color for received data (RX)")
-        self.btn_ctx = QPushButton("TX"); self.btn_ctx.setFixedWidth(44)
-        self.btn_ctx.setToolTip("Color for transmitted data (TX)")
-        self.btn_cbg = QPushButton("BG"); self.btn_cbg.setFixedWidth(44)
-        self.btn_cbg.setToolTip("Color for console background")
-        self._apply_color_btn(self.btn_crx, self._color_rx)
-        self._apply_color_btn(self.btn_ctx, self._color_tx)
-        self._apply_color_btn(self.btn_cbg, self._color_bg)
-        self.btn_crx.clicked.connect(lambda: self._pick_color("rx"))
-        self.btn_ctx.clicked.connect(lambda: self._pick_color("tx"))
-        self.btn_cbg.clicked.connect(lambda: self._pick_color("bg"))
-        grid.addWidget(self.btn_crx, r, 10)
-        grid.addWidget(self.btn_ctx, r, 11)
-        grid.addWidget(self.btn_cbg, r, 12)
-
-        # Theme toggle
+        connection.addWidget(self.connect_btn)
         self.theme_btn = QPushButton("Light theme")
-        self.theme_btn.setMinimumWidth(104)
+        self.theme_btn.setMinimumWidth(108)
         self.theme_btn.setToolTip("Toggle between light and dark theme")
         self.theme_btn.clicked.connect(self._toggle_theme)
-        grid.addWidget(self.theme_btn, r, 13)
+        connection.addWidget(self.theme_btn)
+        root.addLayout(connection)
 
+        framing = QHBoxLayout()
+        framing.setSpacing(8)
+        for attribute, label, values, tooltip in (
+            ("databits_combo", "Data bits:", DATA_BITS, "Number of data bits per character (usually 8)"),
+            ("parity_combo", "Parity:", PARITIES, "Error checking: None, Even, Odd, Mark, Space"),
+            ("stopbits_combo", "Stop bits:", STOP_BITS, "Number of stop bits (1, 1.5, or 2)"),
+            ("flow_combo", "Flow:", FLOW_CTRL, "Flow control for handshaking"),
+            ("eol_tx_combo", "EOL TX:", EOL_OPT, "Line ending appended when transmitting"),
+            ("eol_rx_combo", "EOL RX:", EOL_OPT, "Line ending expected from received data"),
+        ):
+            combo = QComboBox()
+            combo.addItems(values)
+            combo.setToolTip(tooltip)
+            setattr(self, attribute, combo)
+            text = QLabel(label)
+            text.setBuddy(combo)
+            text.setToolTip(tooltip)
+            framing.addWidget(text)
+            framing.addWidget(combo, stretch=1)
+        root.addLayout(framing)
+
+        colors = QHBoxLayout()
+        colors.setSpacing(10)
+        colors.addStretch()
+        colors.addWidget(QLabel("Console colors:"))
+        for attribute, label, target, color in (
+            ("btn_crx", "RX", "rx", self._color_rx),
+            ("btn_ctx", "TX", "tx", self._color_tx),
+            ("btn_cbg", "BG", "bg", self._color_bg),
+        ):
+            button = QPushButton(label)
+            button.setFixedWidth(44)
+            button.setToolTip(f"Customize {label} console color")
+            button.clicked.connect(lambda _checked=False, target=target: self._pick_color(target))
+            self._apply_color_btn(button, color)
+            setattr(self, attribute, button)
+            colors.addWidget(button)
+        root.addLayout(colors)
         return box
 
     # ── Sequence panel ────────────────────────────────────────────────────────
@@ -999,7 +990,7 @@ class SerialMonitorApp(QMainWindow):
         header.setMinimumSectionSize(28)
         self.seq_table.setColumnWidth(0, 30)
         self.seq_table.setColumnWidth(1, 220)
-        self.seq_table.setColumnWidth(2, 70)
+        self.seq_table.setColumnWidth(2, 84)
         self.seq_table.setColumnWidth(3, 32)
         self.seq_table.setColumnWidth(4, 60)
         self.seq_table.setColumnWidth(5, 35)
@@ -1030,9 +1021,9 @@ class SerialMonitorApp(QMainWindow):
         vbox.addLayout(config_layout)
         
         # Variables info
-        var_info = QLabel("💡 Variables: {timestamp}, {counter}, {random}")
+        var_info = QLabel("Variables: {timestamp}, {counter}, {random}")
         var_info.setWordWrap(True)
-        var_info.setStyleSheet("color: #888; font-size: 9px;")
+        set_role(var_info, "muted")
         vbox.addWidget(var_info)
         
         # Export/Import buttons
@@ -1073,6 +1064,9 @@ class SerialMonitorApp(QMainWindow):
         self.speed_lbl = QLabel("Speed: 0 B/s")
         self.rx_lbl = QLabel("RX: 0 B")
         self.tx_lbl = QLabel("TX: 0 B")
+        toolbar.setSpacing(8)
+        for label in (self.speed_lbl, self.tx_lbl, self.rx_lbl):
+            set_role(label, "muted")
         toolbar.addWidget(self.speed_lbl)
         toolbar.addWidget(self.tx_lbl)
         toolbar.addWidget(self.rx_lbl)
@@ -1088,10 +1082,14 @@ class SerialMonitorApp(QMainWindow):
         search_layout.addWidget(self.search_edit)
         
         self.btn_search_prev = QPushButton("◀")
-        self.btn_search_prev.setFixedWidth(30)
+        self.btn_search_prev.setFixedSize(32, 32)
+        set_role(self.btn_search_prev, "compact")
+        self.btn_search_prev.setToolTip("Previous match")
         self.btn_search_prev.clicked.connect(self._search_previous)
         self.btn_search_next = QPushButton("▶")
-        self.btn_search_next.setFixedWidth(30)
+        self.btn_search_next.setFixedSize(32, 32)
+        set_role(self.btn_search_next, "compact")
+        self.btn_search_next.setToolTip("Next match")
         self.btn_search_next.clicked.connect(self._search_next)
         search_layout.addWidget(self.btn_search_prev)
         search_layout.addWidget(self.btn_search_next)
@@ -1111,7 +1109,8 @@ class SerialMonitorApp(QMainWindow):
 
         self.monitor = QTextEdit()
         self.monitor.setReadOnly(True)
-        self.monitor.setFont(QFont("Courier New", 10))
+        set_role(self.monitor, "console")
+        self.monitor.setUndoRedoEnabled(False)
         self.monitor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._apply_monitor_bg(self._color_bg)
         vbox.addWidget(self.monitor)
@@ -1119,51 +1118,76 @@ class SerialMonitorApp(QMainWindow):
 
     # ── Send panel ────────────────────────────────────────────────────────────
     def _build_send_panel(self):
-        box = QGroupBox("Send")
+        box = QGroupBox("Send / Display")
         grid = QGridLayout(box)
-        grid.setSpacing(4)
+        grid.setSpacing(8)
 
-        grid.addWidget(QLabel("Data:"), 0, 0)
+        formats = QHBoxLayout()
+        formats.setSpacing(8)
+        formats.addWidget(QLabel("Send as:"))
+        self.send_fmt = QComboBox()
+        self.send_fmt.addItems(SEND_FMTS)
+        self.send_fmt.setToolTip("Input format for outgoing data; independent of Display.")
+        self.send_fmt.setMinimumWidth(92)
+        formats.addWidget(self.send_fmt)
+        formats.addSpacing(12)
+        formats.addWidget(QLabel("Display:"))
+        self.display_fmt = QComboBox()
+        self.display_fmt.addItems(["ASCII", "HEX", "ASCII + HEX"])
+        self.display_fmt.setToolTip(
+            "View RX and TX as text, hexadecimal bytes, or both. "
+            "Changing this also updates existing messages."
+        )
+        self.display_fmt.currentTextChanged.connect(self._rerender_monitor)
+        formats.addWidget(self.display_fmt)
+        self.chk_ts = QCheckBox("Timestamp")
+        self.chk_ts.setToolTip("Show the original time of each message")
+        self.chk_ts.toggled.connect(self._rerender_monitor)
+        formats.addWidget(self.chk_ts)
+        formats.addStretch()
+        grid.addLayout(formats, 0, 0, 1, 7)
+
+        grid.addWidget(QLabel("Data:"), 1, 0)
         self.send_edit = QLineEdit()
         self.send_edit.returnPressed.connect(self._send_data)
-        grid.addWidget(self.send_edit, 0, 1, 1, 3)
-
-        grid.addWidget(QLabel("Format:"), 0, 4)
-        self.send_fmt = QComboBox(); self.send_fmt.addItems(SEND_FMTS); self.send_fmt.setFixedWidth(80)
-        grid.addWidget(self.send_fmt, 0, 5)
+        grid.addWidget(self.send_edit, 1, 1, 1, 5)
 
         self.send_btn = QPushButton("Send")
-        self.send_btn.setFixedWidth(70)
+        self.send_btn.setMinimumWidth(80)
+        set_role(self.send_btn, "primary")
         self.send_btn.clicked.connect(self._send_data)
-        grid.addWidget(self.send_btn, 0, 6)
+        grid.addWidget(self.send_btn, 1, 6)
 
-        grid.addWidget(QLabel("History:"), 0, 7)
-        self.history_combo = QComboBox(); self.history_combo.setFixedWidth(200)
+        grid.addWidget(QLabel("History:"), 3, 4)
+        self.history_combo = QComboBox()
+        self.history_combo.setMinimumWidth(100)
         self.history_combo.currentTextChanged.connect(self.send_edit.setText)
-        grid.addWidget(self.history_combo, 0, 8)
+        grid.addWidget(self.history_combo, 3, 5, 1, 2)
 
         grid.setColumnStretch(1, 1)
 
-        grid.addWidget(QLabel("Will send (HEX):"), 1, 0)
+        grid.addWidget(QLabel("TX bytes (HEX):"), 2, 0)
         self.send_preview = QLineEdit()
         self.send_preview.setReadOnly(True)
+        set_role(self.send_preview, "monospace")
         self.send_preview.setPlaceholderText("Enter data to see the exact bytes")
         self.send_preview.setToolTip(
             "Exact bytes that will be transmitted, including EOL TX."
         )
-        grid.addWidget(self.send_preview, 1, 1, 1, 8)
+        grid.addWidget(self.send_preview, 2, 1, 1, 6)
 
-        # Row 2 — auto send
-        grid.addWidget(QLabel("Auto-send interval (s):"), 2, 0, 1, 2)
+        # Row 3 — auto send
+        grid.addWidget(QLabel("Auto-send (s):"), 3, 0)
         self.interval_spin = QDoubleSpinBox()
         self.interval_spin.setRange(0.1, 3600); self.interval_spin.setSingleStep(0.5)
-        self.interval_spin.setValue(1.0); self.interval_spin.setFixedWidth(80)
-        grid.addWidget(self.interval_spin, 2, 2)
+        self.interval_spin.setValue(1.0)
+        self.interval_spin.setFixedWidth(100)
+        grid.addWidget(self.interval_spin, 3, 1)
 
         self.auto_btn = QPushButton("Start Auto"); self.auto_btn.setFixedWidth(100)
         set_role(self.auto_btn, "primary")
         self.auto_btn.clicked.connect(self._toggle_auto_send)
-        grid.addWidget(self.auto_btn, 2, 3)
+        grid.addWidget(self.auto_btn, 3, 2, 1, 2)
 
         self._hex_send_validator = HexByteValidator(self.send_edit)
         self.send_edit.textChanged.connect(self._update_send_preview)
@@ -1188,6 +1212,11 @@ class SerialMonitorApp(QMainWindow):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _load_config_into_ui(self):
+        self._load_uart_config()
+        self._apply_theme(self.config.get("theme", "dark"))
+        self._apply_usb_bridge_workspace_modes(show_error=False)
+
+    def _load_uart_config(self):
         self._refresh_ports()
         self._set_combo_data(self.port_combo, self.config.get("port", ""))
         self._set_combo(self.baud_combo, str(self.config.get("baud", 115200)))
@@ -1197,8 +1226,10 @@ class SerialMonitorApp(QMainWindow):
         self._set_combo(self.flow_combo, self.config.get("flowcontrol", "None"))
         self._set_combo(self.eol_tx_combo, self.config.get("eol_tx", "LF"))
         self._set_combo(self.eol_rx_combo, self.config.get("eol_rx", "LF"))
-        self.chk_ascii.setChecked(self.config.get("show_ascii", True))
-        self.chk_hex.setChecked(self.config.get("show_hex", False))
+        show_ascii = self.config.get("show_ascii", True)
+        show_hex = self.config.get("show_hex", False)
+        mode = "ASCII + HEX" if show_ascii and show_hex else "HEX" if show_hex else "ASCII"
+        self.display_fmt.setCurrentText(mode)
         self.chk_ts.setChecked(self.config.get("show_timestamp", True))
         self.uart_tools.load_config(self.config)
         self._set_combo(self.send_fmt, self.config.get("send_format", "ASCII"))
@@ -1213,30 +1244,9 @@ class SerialMonitorApp(QMainWindow):
             )))
         )
         self._alerts = self.config.get("alerts", [])
-        if self.config.get("theme", "dark") == "light":
-            self._apply_light_theme()
-        else:
-            self._apply_dark_theme()
-        self._apply_usb_bridge_workspace_modes(show_error=False)
 
     def _collect_config(self):
-        self.config.set("port", self.port_combo.currentData() or "")
-        self.config.set("baud", int(self.baud_combo.currentText()))
-        self.config.set("databits", int(self.databits_combo.currentText()))
-        self.config.set("parity", self.parity_combo.currentText())
-        self.config.set("stopbits", self.stopbits_combo.currentText())
-        self.config.set("flowcontrol", self.flow_combo.currentText())
-        self.config.set("eol_tx", self.eol_tx_combo.currentText())
-        self.config.set("eol_rx", self.eol_rx_combo.currentText())
-        self.config.set("show_ascii", self.chk_ascii.isChecked())
-        self.config.set("show_hex", self.chk_hex.isChecked())
-        self.config.set("show_timestamp", self.chk_ts.isChecked())
-        self.config.set("send_format", self.send_fmt.currentText())
-        self.config.set("color_rx", self._color_rx)
-        self.config.set("color_tx", self._color_tx)
-        self.config.set("color_bg", self._color_bg)
-        self.config.set("auto_send_interval", self.interval_spin.value())
-        self.uart_tools.collect_config(self.config)
+        self._collect_uart_config()
         if self.active_bridge is not None:
             all_modes = dict(self.config.get("usb_bridge_modes", {}))
             all_modes[self.active_bridge.key] = {
@@ -1253,6 +1263,25 @@ class SerialMonitorApp(QMainWindow):
                 session._collect_config()
             for session in self.usb_bridge_gpio_sessions.values():
                 session.config.set("gpio", session.settings_dict())
+
+    def _collect_uart_config(self):
+        self.config.set("port", self.port_combo.currentData() or "")
+        self.config.set("baud", int(self.baud_combo.currentText()))
+        self.config.set("databits", int(self.databits_combo.currentText()))
+        self.config.set("parity", self.parity_combo.currentText())
+        self.config.set("stopbits", self.stopbits_combo.currentText())
+        self.config.set("flowcontrol", self.flow_combo.currentText())
+        self.config.set("eol_tx", self.eol_tx_combo.currentText())
+        self.config.set("eol_rx", self.eol_rx_combo.currentText())
+        self.config.set("show_ascii", self.display_fmt.currentText() != "HEX")
+        self.config.set("show_hex", self.display_fmt.currentText() != "ASCII")
+        self.config.set("show_timestamp", self.chk_ts.isChecked())
+        self.config.set("send_format", self.send_fmt.currentText())
+        self.config.set("color_rx", self._color_rx)
+        self.config.set("color_tx", self._color_tx)
+        self.config.set("color_bg", self._color_bg)
+        self.config.set("auto_send_interval", self.interval_spin.value())
+        self.uart_tools.collect_config(self.config)
         self.config.set("sequence_interval", self.seq_interval_spin.value())
         self.config.set("sequence_mode", self.seq_mode_combo.currentText())
         self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
@@ -1292,6 +1321,9 @@ class SerialMonitorApp(QMainWindow):
         )
         self.main_tabs.setTabVisible(0, general_visible)
         self.main_tabs.setTabVisible(1, has_protocol_bridge)
+        self.usb_bridge_mode_panel.setVisible(has_protocol_bridge)
+        # Exactly one workspace is visible; its groups already identify it.
+        self.main_tabs.tabBar().hide()
         if general_visible:
             self.main_tabs.setTabToolTip(
                 0,
@@ -1305,25 +1337,45 @@ class SerialMonitorApp(QMainWindow):
 
     def _refresh_ports(self):
         """List ordinary serial ports while reserving known USB bridges."""
-        current = self.port_combo.currentData()
-        self.port_combo.clear()
         # If PyFtdi/libusb is unavailable, do not hide usable FTDI VCP ports
         # from the ordinary serial console.
         reserve_detected_bridges = bool(self.usb_bridge_adapters)
         general_ports = list(list_port_details(
             include_usb_bridges=not reserve_detected_bridges
         ))
-        for label, device in general_ports:
-            self.port_combo.addItem(label, device)
         if not general_ports:
-            self.port_combo.addItem(
-                "No serial devices detected — connect a USB/UART device and press Refresh",
-                None,
-            )
-        index = self.port_combo.findData(current)
-        if index >= 0:
-            self.port_combo.setCurrentIndex(index)
+            general_ports = [(
+                "No serial devices detected — connect a USB/UART device and press Refresh", None
+            )]
+        self._replace_port_choices(self.port_combo, general_ports)
         self._update_console_tab_visibility()
+
+    @staticmethod
+    def _replace_port_choices(combo, ports):
+        """Refresh changed inventories without disturbing the selected port."""
+        current_items = [
+            (combo.itemText(index), combo.itemData(index))
+            for index in range(combo.count())
+        ]
+        if current_items == ports:
+            return
+        current = combo.currentData()
+        was_blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            for label, device in ports:
+                combo.addItem(label, device)
+            index = combo.findData(current)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        finally:
+            combo.blockSignals(was_blocked)
+
+    def _refresh_uart_ports(self):
+        """VCP ports can change independently of the raw USB bridge list."""
+        self._refresh_ports()
+        for session in getattr(self, "usb_bridge_uart_sessions", {}).values():
+            session._refresh_ports()
 
     def _usb_bridge_modes_changed(self):
         if hasattr(self, "port_combo"):
@@ -1405,7 +1457,7 @@ class SerialMonitorApp(QMainWindow):
                 self.usb_bridge_combo.clear()
                 self.usb_bridge_combo.addItem(f"Detection error: {error}", None)
                 self.usb_bridge_combo.blockSignals(False)
-                self._update_console_tab_visibility()
+            self._refresh_uart_ports()
             if was_manual:
                 self.statusBar().showMessage(
                     f"USB bridge detection failed: {error}", 6000
@@ -1423,7 +1475,7 @@ class SerialMonitorApp(QMainWindow):
                     "No supported adapter detected", None
                 )
                 self.usb_bridge_combo.blockSignals(False)
-                self._update_console_tab_visibility()
+            self._refresh_uart_ports()
             if was_manual:
                 self.statusBar().showMessage("USB adapter list is already current.", 2500)
             return
@@ -1444,7 +1496,7 @@ class SerialMonitorApp(QMainWindow):
         self.usb_bridge_combo.setCurrentIndex(selected)
         self.usb_bridge_combo.blockSignals(False)
         self._rebuild_usb_bridge_workspace()
-        self._refresh_ports()
+        self._refresh_uart_ports()
 
         current_models = [bridge.model for bridge in bridges]
         if current_models:
@@ -2622,6 +2674,7 @@ class SerialMonitorApp(QMainWindow):
     def _check_connected(self):
         if self.worker and self.worker.is_connected:
             self._connection_established = True
+            self._stats_timer.start()
             if hasattr(self, "uart_tools"):
                 self.uart_tools.set_connection(
                     self.worker, self.flow_combo.currentText()
@@ -2634,6 +2687,7 @@ class SerialMonitorApp(QMainWindow):
             self._disconnect()
 
     def _disconnect(self):
+        self._stats_timer.stop()
         self._connection_established = False
         if hasattr(self, "uart_tools"):
             self.uart_tools.set_connection(None, self.flow_combo.currentText())
@@ -2654,9 +2708,7 @@ class SerialMonitorApp(QMainWindow):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _display_rx(self, data: bytes):
-        line = self._format_line(data, "RX")
-        self._append(line, self._color_rx)
-        self.log.append(line)
+        line = self._record_serial_data(data, "RX")
         
         # Check alerts
         self._check_alerts(line)
@@ -2677,24 +2729,40 @@ class SerialMonitorApp(QMainWindow):
             return
         QMessageBox.critical(self, "Serial Error", error)
 
-    def _format_line(self, data: bytes, direction: str) -> str:
-        parts = []
-        if self.chk_ts.isChecked():
-            parts.append(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}]")
-        parts.append(direction)
-        show_ascii = self.chk_ascii.isChecked()
-        show_hex   = self.chk_hex.isChecked()
-        if not show_ascii and not show_hex:
-            show_ascii = True
-        if show_ascii:
-            text = data.decode("utf-8", errors="replace").rstrip("\r\n")
-            parts.append(f"ASCII: {text}")
-        if show_hex:
-            parts.append(f"HEX: {data.hex(' ').upper()}")
-        return "  ".join(parts) + "\n"
+    def _format_log_entry(self, entry):
+        return entry.format(self.display_fmt.currentText(), self.chk_ts.isChecked())
 
-    def _append(self, text: str, color: str):
-        self._append_raw(text, color)
+    def _record_serial_data(self, data, direction):
+        entry = self.log.append(data, direction)
+        line = self._format_log_entry(entry)
+        self._append(line, self._color_rx if direction == "RX" else self._color_tx)
+        return line
+
+    def _rerender_monitor(self, *_args):
+        """Reformat retained bytes without sending data or repeating alerts."""
+        if not self.log:
+            return
+        self._search_refresh_timer.stop()
+        scrollbar = self.monitor.verticalScrollBar()
+        position = scrollbar.value()
+        follow_end = position == scrollbar.maximum()
+        self.monitor.setUpdatesEnabled(False)
+        try:
+            self.monitor.clear()
+            cursor = QTextCursor(self.monitor.document())
+            cursor.beginEditBlock()
+            for entry in self.log:
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(
+                    self._color_rx if entry.direction == "RX" else self._color_tx
+                ))
+                cursor.insertText(self._format_log_entry(entry), fmt)
+            cursor.endEditBlock()
+            self.monitor.setTextCursor(cursor)
+            self._refresh_search_results(preserve_index=True)
+            scrollbar.setValue(scrollbar.maximum() if follow_end else position)
+        finally:
+            self.monitor.setUpdatesEnabled(True)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Sending
@@ -2724,11 +2792,11 @@ class SerialMonitorApp(QMainWindow):
         except ValueError as exc:
             valid = False
             self.send_preview.setText(str(exc) if self.send_edit.text() else "")
-            self.send_preview.setStyleSheet("color:#FF7777;")
+            set_status(self.send_preview, "error" if self.send_edit.text() else "ready")
         else:
             valid = True
             self.send_preview.setText(format_payload_preview(payload))
-            self.send_preview.setStyleSheet("color:#70DB93;")
+            set_status(self.send_preview, "ready")
 
         if not valid and self._auto_timer.isActive():
             self._toggle_auto_send()
@@ -2749,9 +2817,7 @@ class SerialMonitorApp(QMainWindow):
             self.statusBar().showMessage(str(exc), 5000)
             return
         self.worker.send(payload)
-        line = self._format_line(payload, "TX")
-        self._append(line, self._color_tx)
-        self.log.append(line)
+        self._record_serial_data(payload, "TX")
         self.tx_lbl.setText(f"TX: {self._human(self.worker.tx_bytes)}")
         self.config.add_to_history(text)
         self._update_history_combo()
@@ -2787,7 +2853,7 @@ class SerialMonitorApp(QMainWindow):
     # Command Sequence
     # ──────────────────────────────────────────────────────────────────────────
     
-    def _add_sequence_command(self):
+    def _add_sequence_command(self, _checked=False, *, command="", command_format="ASCII"):
         """Add a new empty command to the sequence"""
         row = self.seq_table.rowCount()
         self.seq_table.insertRow(row)
@@ -2799,19 +2865,21 @@ class SerialMonitorApp(QMainWindow):
         self.seq_table.setItem(row, 0, num_item)
         
         # Command column (editable)
-        cmd_item = QTableWidgetItem("")
+        cmd_item = QTableWidgetItem(command)
         self.seq_table.setItem(row, 1, cmd_item)
 
         # Format column (ASCII/HEX)
         fmt_combo = QComboBox()
         fmt_combo.addItems(SEND_FMTS)
-        fmt_combo.setCurrentText("ASCII")
+        fmt_combo.setCurrentText(command_format)
         self.seq_table.setCellWidget(row, 2, fmt_combo)
         
         # Send button column
         btn_send = QPushButton("▶")
         btn_send.setFixedSize(28, 25)
-        set_role(btn_send, "success")
+        set_role(btn_send, "compact")
+        btn_send.setProperty("action", "send")
+        btn_send.setToolTip("Send this command")
         btn_send.clicked.connect(lambda: self._send_sequence_command_manual(row))
         self.seq_table.setCellWidget(row, 3, btn_send)
         
@@ -2823,9 +2891,13 @@ class SerialMonitorApp(QMainWindow):
         
         btn_up = QPushButton("↑")
         btn_up.setFixedSize(25, 25)
+        set_role(btn_up, "compact")
+        btn_up.setToolTip("Move command up")
         btn_up.clicked.connect(lambda: self._move_sequence_command_up(row))
         btn_down = QPushButton("↓")
         btn_down.setFixedSize(25, 25)
+        set_role(btn_down, "compact")
+        btn_down.setToolTip("Move command down")
         btn_down.clicked.connect(lambda: self._move_sequence_command_down(row))
         
         move_layout.addWidget(btn_up)
@@ -2835,7 +2907,9 @@ class SerialMonitorApp(QMainWindow):
         # Delete button column
         btn_delete = QPushButton("✕")
         btn_delete.setFixedSize(30, 25)
-        set_role(btn_delete, "danger")
+        set_role(btn_delete, "compact")
+        btn_delete.setProperty("action", "delete")
+        btn_delete.setToolTip("Remove this command")
         btn_delete.clicked.connect(lambda: self._remove_sequence_command(row))
         self.seq_table.setCellWidget(row, 5, btn_delete)
     
@@ -3019,9 +3093,7 @@ class SerialMonitorApp(QMainWindow):
         
         if self.worker and self.worker.is_connected:
             self.worker.send(payload)
-            line = self._format_line(payload, "TX")
-            self._append(line, self._color_tx)
-            self.log.append(line)
+            self._record_serial_data(payload, "TX")
             self.tx_lbl.setText(f"TX: {self._human(self.worker.tx_bytes)}")
     
     def _send_sequence_command_manual(self, index: int):
@@ -3061,9 +3133,7 @@ class SerialMonitorApp(QMainWindow):
             return
         
         self.worker.send(payload)
-        line = self._format_line(payload, "TX")
-        self._append(line, self._color_tx)
-        self.log.append(line)
+        self._record_serial_data(payload, "TX")
         self.tx_lbl.setText(f"TX: {self._human(self.worker.tx_bytes)}")
         
         # Brief visual feedback
@@ -3088,68 +3158,18 @@ class SerialMonitorApp(QMainWindow):
                     item.setBackground(QColor("transparent"))
     
     def _load_sequence_commands(self):
-        """Load sequence commands from config into the table"""
-        commands = self.config.get("sequence_commands", [])
-        for cmd in commands:
-            row = self.seq_table.rowCount()
-            self.seq_table.insertRow(row)
-
-            if isinstance(cmd, dict):
-                cmd_text = str(cmd.get("command", ""))
-                cmd_format = str(cmd.get("format", "ASCII"))
+        """Restore saved commands using the same row builder as Add Command."""
+        self.seq_table.setRowCount(0)
+        for saved in self.config.get("sequence_commands", []):
+            if isinstance(saved, dict):
+                command = str(saved.get("command", ""))
+                command_format = str(saved.get("format", "ASCII"))
             else:
-                cmd_text = str(cmd)
-                cmd_format = "ASCII"
-            if cmd_format not in SEND_FMTS:
-                cmd_format = "ASCII"
-            
-            # Number column
-            num_item = QTableWidgetItem(str(row + 1))
-            num_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            num_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.seq_table.setItem(row, 0, num_item)
-            
-            # Command column (editable)
-            cmd_item = QTableWidgetItem(cmd_text)
-            self.seq_table.setItem(row, 1, cmd_item)
+                command, command_format = str(saved), "ASCII"
+            if command_format not in SEND_FMTS:
+                command_format = "ASCII"
+            self._add_sequence_command(command=command, command_format=command_format)
 
-            # Format column (ASCII/HEX)
-            fmt_combo = QComboBox()
-            fmt_combo.addItems(SEND_FMTS)
-            fmt_combo.setCurrentText(cmd_format)
-            self.seq_table.setCellWidget(row, 2, fmt_combo)
-            
-            # Send button column
-            btn_send = QPushButton("▶")
-            btn_send.setFixedSize(28, 25)
-            set_role(btn_send, "success")
-            btn_send.clicked.connect(lambda checked, r=row: self._send_sequence_command_manual(r))
-            self.seq_table.setCellWidget(row, 3, btn_send)
-            
-            # Move buttons column
-            move_widget = QWidget()
-            move_layout = QHBoxLayout(move_widget)
-            move_layout.setContentsMargins(2, 2, 2, 2)
-            move_layout.setSpacing(2)
-            
-            btn_up = QPushButton("↑")
-            btn_up.setFixedSize(25, 25)
-            btn_up.clicked.connect(lambda checked, r=row: self._move_sequence_command_up(r))
-            btn_down = QPushButton("↓")
-            btn_down.setFixedSize(25, 25)
-            btn_down.clicked.connect(lambda checked, r=row: self._move_sequence_command_down(r))
-            
-            move_layout.addWidget(btn_up)
-            move_layout.addWidget(btn_down)
-            self.seq_table.setCellWidget(row, 4, move_widget)
-            
-            # Delete button column
-            btn_delete = QPushButton("✕")
-            btn_delete.setFixedSize(30, 25)
-            set_role(btn_delete, "danger")
-            btn_delete.clicked.connect(lambda checked, r=row: self._remove_sequence_command(r))
-            self.seq_table.setCellWidget(row, 5, btn_delete)
-    
     def _save_sequence_commands(self):
         """Save sequence commands from table to config"""
         commands = []
@@ -3268,6 +3288,7 @@ class SerialMonitorApp(QMainWindow):
     
     def _search_in_monitor(self):
         """Find literal text in the visible monitor, case-insensitively."""
+        self._search_refresh_timer.stop()
         self._search_text = self.search_edit.text()
         self._search_result_index = -1
         self._refresh_search_results()
@@ -3336,11 +3357,13 @@ class SerialMonitorApp(QMainWindow):
     
     def _search_next(self):
         """Select the next match, wrapping to the beginning."""
+        self._flush_pending_search()
         if self._search_results:
             self._select_search_result(self._search_result_index + 1)
     
     def _search_previous(self):
         """Select the previous match, wrapping to the end."""
+        self._flush_pending_search()
         if not self._search_results:
             return
         index = (
@@ -3350,7 +3373,12 @@ class SerialMonitorApp(QMainWindow):
         )
         self._select_search_result(index)
     
-    def _append_raw(self, text: str, color: str):
+    def _flush_pending_search(self):
+        if self._search_refresh_timer.isActive():
+            self._search_refresh_timer.stop()
+            self._refresh_search_results(preserve_index=True)
+
+    def _append(self, text: str, color: str):
         """Append colored text and refresh an active literal search."""
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
@@ -3359,8 +3387,8 @@ class SerialMonitorApp(QMainWindow):
         cursor.insertText(text, fmt)
         self.monitor.setTextCursor(cursor)
         self.monitor.ensureCursorVisible()
-        if self._search_text:
-            self._refresh_search_results(preserve_index=True)
+        if self._search_text and not self._search_refresh_timer.isActive():
+            self._search_refresh_timer.start()
     
     # ──────────────────────────────────────────────────────────────────────────
     # Alerts
@@ -3441,7 +3469,9 @@ class SerialMonitorApp(QMainWindow):
         button_layout.addWidget(btn_add)
         
         btn_delete = QPushButton("🗑 Delete Selected")
-        set_role(btn_delete, "danger")
+        set_role(btn_delete, "compact")
+        btn_delete.setProperty("action", "delete")
+        btn_delete.setToolTip("Remove this command")
         def delete_alert():
             current = self.alerts_list.currentRow()
             if current < 0:
@@ -3569,6 +3599,7 @@ class SerialMonitorApp(QMainWindow):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _clear_monitor(self):
+        self._search_refresh_timer.stop()
         self.monitor.clear()
         self.log.clear()
         self._search_results.clear()
@@ -3582,7 +3613,7 @@ class SerialMonitorApp(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Log", "", "Log files (*.log);;Text files (*.txt);;All (*)")
         if path:
-            if self.log.save(path):
+            if self.log.save(path, self._format_log_entry):
                 self.statusBar().showMessage(f"Log saved: {path}", 3000)
             else:
                 QMessageBox.critical(self, "Error", "Could not write log file.")
@@ -3630,16 +3661,26 @@ class SerialMonitorApp(QMainWindow):
             self.config.set("theme", "dark")
 
     def _apply_dark_theme(self):
-        self.setStyleSheet(stylesheet("dark"))
-        self._dark_mode = True
-        if hasattr(self, "theme_btn"):
-            self.theme_btn.setText("Light theme")
+        self._apply_theme("dark")
 
     def _apply_light_theme(self):
-        self.setStyleSheet(stylesheet("light"))
-        self._dark_mode = False
+        self._apply_theme("light")
+
+    def _apply_theme(self, theme):
+        theme = "light" if theme == "light" else "dark"
+        self._dark_mode = theme == "dark"
+        self.setPalette(palette(theme))
+        self.setStyleSheet(stylesheet(theme))
         if hasattr(self, "theme_btn"):
-            self.theme_btn.setText("Dark theme")
+            self.theme_btn.setText("Light theme" if self._dark_mode else "Dark theme")
+        # Embedded QMainWindows must inherit the workspace theme. Otherwise a
+        # saved child stylesheet overrides the parent after switching themes.
+        for session in self.findChildren(SerialMonitorApp):
+            session.setStyleSheet("")
+            session.setPalette(self.palette())
+            session._dark_mode = self._dark_mode
+            if hasattr(session, "theme_btn"):
+                session.theme_btn.setText("Light theme" if self._dark_mode else "Dark theme")
 
     def _polish_widget_tree(self):
         """Apply usability defaults to static and dynamically-created panels."""
@@ -3678,6 +3719,10 @@ class SerialMonitorApp(QMainWindow):
             combo.setCurrentIndex(idx)
 
     def closeEvent(self, event):
+        self._stats_timer.stop()
+        self._auto_timer.stop()
+        self._sequence_timer.stop()
+        self._search_refresh_timer.stop()
         if self._manages_usb_bridges:
             self._closing = True
             self._bridge_monitor_timer.stop()
@@ -3726,8 +3771,8 @@ class UartSessionPanel(SerialMonitorApp):
         splitter.setChildrenCollapsible(False)
         self.main_splitter = splitter
         sequence = self._build_sequence_panel()
-        sequence.setMinimumWidth(300)
-        sequence.setMaximumWidth(520)
+        sequence.setMinimumWidth(320)
+        sequence.setMaximumWidth(640)
         splitter.addWidget(sequence)
         right = QWidget()
         right_root = QVBoxLayout(right)
@@ -3736,77 +3781,25 @@ class UartSessionPanel(SerialMonitorApp):
         right_root.addWidget(self._build_send_panel())
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
-        width = max(300, min(520, int(self.config.get("sequence_panel_width", 340))))
+        width = max(320, min(640, int(self.config.get("sequence_panel_width", 500))))
         splitter.setSizes([width, 900])
         root.addWidget(splitter, stretch=1)
         self._build_status_bar()
 
     def _load_config_into_ui(self):
-        self._refresh_ports()
-        self._set_combo_data(self.port_combo, self.config.get("port", ""))
-        self._set_combo(self.baud_combo, str(self.config.get("baud", 115200)))
-        self._set_combo(self.databits_combo, str(self.config.get("databits", 8)))
-        self._set_combo(self.parity_combo, self.config.get("parity", "None"))
-        self._set_combo(self.stopbits_combo, str(self.config.get("stopbits", "1")))
-        self._set_combo(self.flow_combo, self.config.get("flowcontrol", "None"))
-        self._set_combo(self.eol_tx_combo, self.config.get("eol_tx", "LF"))
-        self._set_combo(self.eol_rx_combo, self.config.get("eol_rx", "LF"))
-        self.chk_ascii.setChecked(self.config.get("show_ascii", True))
-        self.chk_hex.setChecked(self.config.get("show_hex", False))
-        self.chk_ts.setChecked(self.config.get("show_timestamp", True))
-        self.uart_tools.load_config(self.config)
-        self._set_combo(self.send_fmt, self.config.get("send_format", "ASCII"))
-        self.interval_spin.setValue(float(self.config.get("auto_send_interval", 1.0)))
-        self._update_history_combo()
-        self.seq_interval_spin.setValue(float(self.config.get("sequence_interval", 1.0)))
-        self._set_combo(self.seq_mode_combo, self.config.get("sequence_mode", "Stop"))
-        self._load_sequence_commands()
-        self.seq_table.setColumnWidth(
-            1, max(120, min(1000, int(self.config.get("sequence_command_col_width", 220))))
-        )
-        self._alerts = self.config.get("alerts", [])
-        if self.config.get("theme", "dark") == "light":
-            self._apply_light_theme()
+        self._load_uart_config()
+        self._apply_theme(self.config.get("theme", "dark"))
 
     def _collect_config(self):
-        self.config.set("port", self.port_combo.currentData() or "")
-        self.config.set("baud", int(self.baud_combo.currentText()))
-        self.config.set("databits", int(self.databits_combo.currentText()))
-        self.config.set("parity", self.parity_combo.currentText())
-        self.config.set("stopbits", self.stopbits_combo.currentText())
-        self.config.set("flowcontrol", self.flow_combo.currentText())
-        self.config.set("eol_tx", self.eol_tx_combo.currentText())
-        self.config.set("eol_rx", self.eol_rx_combo.currentText())
-        self.config.set("show_ascii", self.chk_ascii.isChecked())
-        self.config.set("show_hex", self.chk_hex.isChecked())
-        self.config.set("show_timestamp", self.chk_ts.isChecked())
-        self.config.set("send_format", self.send_fmt.currentText())
-        self.config.set("color_rx", self._color_rx)
-        self.config.set("color_tx", self._color_tx)
-        self.config.set("color_bg", self._color_bg)
-        self.config.set("auto_send_interval", self.interval_spin.value())
-        self.uart_tools.collect_config(self.config)
-        self.config.set("sequence_interval", self.seq_interval_spin.value())
-        self.config.set("sequence_mode", self.seq_mode_combo.currentText())
-        self.config.set("sequence_command_col_width", self.seq_table.columnWidth(1))
-        sizes = self.main_splitter.sizes()
-        if sizes:
-            self.config.set("sequence_panel_width", sizes[0])
-        self._save_sequence_commands()
+        self._collect_uart_config()
 
     def _refresh_ports(self):
-        current = self.port_combo.currentData()
         ports = list_bridge_interface_ports(
             self.session_channel,
             bridge_pid=self.bound_bridge.pid,
             bridge_serial=self.bound_bridge.serial or None,
         )
-        self.port_combo.clear()
-        for label, device in ports:
-            self.port_combo.addItem(label, device)
-        index = self.port_combo.findData(current)
-        if index >= 0:
-            self.port_combo.setCurrentIndex(index)
+        self._replace_port_choices(self.port_combo, ports)
 
     def _connect(self):
         try:
@@ -3835,6 +3828,8 @@ class UartSessionPanel(SerialMonitorApp):
         if self._sequence_running:
             self._stop_sequence()
         self._collect_config()
+        self._search_refresh_timer.stop()
+        self.uart_tools.shutdown()
         self._disconnect()
 
     def closeEvent(self, event):

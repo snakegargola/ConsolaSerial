@@ -2,7 +2,7 @@
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
-    QComboBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
+    QComboBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
     QLabel, QLineEdit, QInputDialog, QMessageBox, QPushButton, QSpinBox, QTextEdit,
     QVBoxLayout, QWidget,
 )

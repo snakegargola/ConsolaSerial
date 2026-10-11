@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .uart_loopback import LoopbackStreamMatcher, build_loopback_frame
+from .ui_theme import set_role, set_status
 
 
 class UartToolsPanel(QGroupBox):
@@ -41,7 +42,6 @@ class UartToolsPanel(QGroupBox):
         self._modem_timer = QTimer(self)
         self._modem_timer.setInterval(500)
         self._modem_timer.timeout.connect(self._poll_modem_inputs)
-        self._modem_timer.start()
 
         self._build_ui()
         self._update_availability()
@@ -88,6 +88,7 @@ class UartToolsPanel(QGroupBox):
             indicator = QLabel()
             indicator.setMinimumWidth(58)
             indicator.setToolTip(f"Live {line} modem-input state")
+            set_role(indicator, "indicator")
             self.modem_labels[line] = indicator
             self._set_indicator(line, None)
             grid.addWidget(indicator, 0, column)
@@ -118,6 +119,7 @@ class UartToolsPanel(QGroupBox):
         grid.addWidget(self.timeout_spin, 1, 5, 1, 2)
 
         self.run_btn = QPushButton("Run TX→RX loopback")
+        set_role(self.run_btn, "primary")
         self.run_btn.setToolTip(
             "Connect TX to RX on this UART, then verify binary test frames."
         )
@@ -139,6 +141,9 @@ class UartToolsPanel(QGroupBox):
         self._flow_control = str(flow_control)
         if self._worker:
             self._apply_outputs()
+            self._modem_timer.start()
+        else:
+            self._modem_timer.stop()
         self._poll_modem_inputs()
         self._update_availability()
 
@@ -178,6 +183,7 @@ class UartToolsPanel(QGroupBox):
         if self._active:
             self._finish(cancelled=True, reason="UART session closed")
         self._timeout_timer.stop()
+        self._modem_timer.stop()
         self._worker = None
         self._poll_modem_inputs()
         self._update_availability()
@@ -219,13 +225,13 @@ class UartToolsPanel(QGroupBox):
         indicator = self.modem_labels[line]
         if state is True:
             indicator.setText(f"{line}: ●")
-            indicator.setStyleSheet("color:#00C853; font-weight:bold;")
+            set_status(indicator, "ok")
         elif state is False:
             indicator.setText(f"{line}: ○")
-            indicator.setStyleSheet("color:#777777;")
+            set_status(indicator, "ready")
         else:
             indicator.setText(f"{line}: ?")
-            indicator.setStyleSheet("color:#A0A0A0;")
+            set_status(indicator, "ready")
 
     def _poll_modem_inputs(self):
         status = None

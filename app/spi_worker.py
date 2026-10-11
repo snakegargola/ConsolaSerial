@@ -7,8 +7,6 @@ import threading
 import time
 
 from .spi_bus import (
-    SpiBusSettings,
-    SpiTransaction,
     classify_spi_error,
     execute_spi_transaction,
     format_spi_hex,

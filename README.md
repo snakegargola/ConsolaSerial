@@ -7,7 +7,7 @@ con Python, PyQt6, pyserial y PyFtdi.
 
 - Consola UART para `/dev/ttyUSB*`, `/dev/ttyACM*` y otros puertos seriales.
 - Configuración de baud rate, bits, paridad, stop bits y control de flujo.
-- Envío ASCII/HEX, vista previa, historial, timestamps y búsqueda.
+- Envío ASCII/HEX y visualización independiente en ASCII, HEX o ambos; cambiar la vista actualiza también los mensajes anteriores. Vista previa, historial, timestamps y búsqueda.
 - Loopback UART y control de RTS, DTR y BREAK.
 - Soporte de puentes FTDI para UART, I²C, SPI y GPIO.
 - Inspectores, secuencias, memorias y exportación de resultados.

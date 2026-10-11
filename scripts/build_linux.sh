@@ -25,7 +25,7 @@ fi
   --windowed \
   --name SerialMonitor \
   --collect-all libusb_package \
-  --icon "$ROOT_DIR/assets/serial.png" \
+  --add-data "$ROOT_DIR/assets/ui:assets/ui" \
   "$ROOT_DIR/main.py"
 
 SELF_TEST_REPORT="$ROOT_DIR/dist/linux-self-test.json"
@@ -40,7 +40,9 @@ fi
 mkdir -p "$ROOT_DIR/dist/linux"
 cp -f "$ROOT_DIR/dist/SerialMonitor" "$ROOT_DIR/dist/linux/SerialMonitor"
 chmod +x "$ROOT_DIR/dist/linux/SerialMonitor"
-cp -f "$ROOT_DIR/config.example.json" "$ROOT_DIR/dist/linux/config.json"
+if [[ ! -f "$ROOT_DIR/dist/linux/config.json" ]]; then
+  cp "$ROOT_DIR/config.example.json" "$ROOT_DIR/dist/linux/config.json"
+fi
 cp -f "$ROOT_DIR/assets/serial.png" "$ROOT_DIR/dist/linux/serial.png"
 cp -f "$ROOT_DIR/docs/LINUX.md" "$ROOT_DIR/dist/linux/LEEME.md"
 cp -f "$SELF_TEST_REPORT" "$ROOT_DIR/dist/linux/runtime-self-test.json"
