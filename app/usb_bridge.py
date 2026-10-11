@@ -185,11 +185,11 @@ def discover_usb_bridges():
     except ImportError:
         return []
 
-    # PyFtdi/libusb may try to inspect every USB device on Windows while
+    # PyFtdi/libusb may try to inspect every USB device while
     # looking for FTDI hardware.  Ordinary USB-UART adapters (CH340, CP210x,
     # PL2303, etc.) can reject string-descriptor requests with errors such as
     # ``The device has no langid`` even though their COM port works normally.
-    # If Windows already reports serial devices and none is FTDI, there is no
+    # If the system already reports serial devices and none is FTDI, there is no
     # reason to run the MPSSE bridge scan.
     try:
         from serial.tools import list_ports
@@ -211,7 +211,7 @@ def discover_usb_bridges():
     except Exception as exc:
         # A VCP FTDI device can be used normally by PySerial while libusb
         # cannot read its USB string descriptors.  This is expected when the
-        # FTDI VCP driver is installed instead of libusb-win32; it means that
+        # The VCP driver is installed instead of a raw USB backend; it means that
         # MPSSE protocols are unavailable, not that the UART is broken.
         benign_error = str(exc).lower()
         if any(marker in benign_error for marker in (
